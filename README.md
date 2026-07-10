@@ -1,112 +1,92 @@
-<p align="center">
-  <h1 align="center">Senxe Cerebellum v4.0 (Pure Wetware)</h1>
-  <p align="center">
-    <strong>100% Biologically-Grounded Motor Control for Industrial Robotics</strong><br>
-    Interfacing Cortical Labs CL1 Biological Neurons with Robotic Arms
-  </p>
-</p>
+# Senxe Cerebellum: Biologically-Grounded Robotic Motor Control
 
-<p align="center">
-  <a href="#what-is-this-project">What is this?</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#core-philosophy">Core Philosophy</a> •
-  <a href="#architecture">Architecture</a>
-</p>
+Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
+
+The framework maps multi-modal physical sensor readings (force, torque, kinematics) into closed-loop electrical stimulation patterns and decodes biological firing outputs (spikes) into continuous action trajectories to solve force-sensitive assembly tasks (such as the RoboSuite NutAssembly benchmark).
+
+> [!NOTE]
+> **Hardware Fallback**: This framework is built directly on the official Cortical Labs `cl-sdk`. It automatically detects physical hardware; when a CL1 device is not present, it gracefully falls back to the SDK's official Poisson simulation server, enabling developers and researchers to run the entire pipeline locally.
 
 ---
 
-## What is this project?
+## Core Scientific Modules
 
-> *"What if we stopped training artificial networks to mimic biology — and just used the biology itself?"*
+### 1. Neuromorphic Event-Driven Sparse Coding (VIE)
+The **Virtual Interference Encoding (VIE)** module ([core/vie.py](file:///Users/azur/Desktop/github_repo/core/vie.py)) maps continuous environment observations onto the 64-channel microelectrode array (MEA). 
+*   **Sparse Encoding**: To minimize signal crosstalk and cellular overstimulation, sensory modalities (e.g., force/torque deltas) are encoded using delta-tracking. Electrodes are only stimulated when physical quantities change significantly.
+*   **Attention Multiplexing**: Channels are dynamically reallocated between visual/tactile sensory modalities based on the robot's current task phase (searching vs. inserting).
 
-Most modern robotics rely on Artificial Intelligence (like Deep Reinforcement Learning) running on silicon chips (GPUs) to control robotic arms. **Senxe Cerebellum takes a radically different approach: it replaces the AI with a living biological brain.**
+### 2. Antagonistic Muscle-Pair Decoding
+Motor outputs are decoded based on the biological flexor/extensor antagonistic principle ([core/decoder.py](file:///Users/azur/Desktop/github_repo/core/decoder.py)). 
+*   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations (Even/Odd pairs). Each of the 7 action dimensions is driven by the differential activity:
+    $$\text{Action}[i] = \frac{\text{flexor\_sum} - \text{extensor\_sum}}{\text{flexor\_sum} + \text{extensor\_sum} + \epsilon}$$
+*   **EMA Inertia Filter**: Outputs are smoothed using an Exponential Moving Average (EMA) filter to mimic the biomechanical damping and inertia of physical muscle tissue, producing jerk-free trajectories.
 
-This project is a software bridge that connects a **Cortical Labs CL1** — a physical microelectrode array (MEA) culturing hundreds of thousands of living biological neurons (a "mini-brain" or organoid) — directly to a 7-DoF industrial robotic arm (Franka Panda). 
+### 3. FEP-Driven Kinematic Gate (PDI)
+Rather than using hand-tuned exploration schedules, exploration is regulated by the **Physical Disturbance Index (PDI)** ([core/pdi.py](file:///Users/azur/Desktop/github_repo/core/pdi.py)). Inspired by the Free Energy Principle (FEP):
+*   **High PDI** (unstable kinematics, high sensory surprise) increases Gaussian perturbation to force exploration and surprise minimization.
+*   **Low PDI** (stable kinematics, low surprise) limits perturbation to exploit the current steady-state control policy.
 
-Instead of writing code to calculate how the robot should move, we stream physical sensations (force, torque, and spatial distance) directly into the living cells as electrical pulses. The biological neurons process this "pain" and "reward", and their natural electrical firing patterns (spikes) are decoded in real-time to physically move the robotic arm and assemble a nut onto a peg.
-
-**This is not a simulation. This is a 100% Pure Wetware interface.**
+### 4. Intrinsic Firing-Rate Curiosity
+The **Neural Curiosity** module ([core/curiosity.py](file:///Users/azur/Desktop/github_repo/core/curiosity.py)) monitors firing pattern novelty. Novel electrophysiological patterns boost the exploration rate, driving the neural network to escape local minima in silent or repetitive states.
 
 ---
 
-## Core Philosophy
+## Major Updates (Compared to April 2026 Release)
 
-### 1. Unified Interface (Real Hardware & Official Simulation)
-We have violently purged all our custom `Mock` simulators and Deep Learning (PPO) training wheels. The codebase strictly interfaces through the official Cortical Labs `cl-sdk`. If you connect real biological hardware, it runs in 100% Pure Wetware mode. If physical hardware is absent, the SDK gracefully auto-detects and falls back to its official Poisson simulator, allowing researchers to test the architecture without physical wetware.
+Since the initial release (`a1057ea` on April 13, 2026), the framework has undergone major refactoring, bug fixing, and scientific alignment:
 
-### 2. Neuromorphic Event-Driven Sparse Coding (VIE)
-The **Virtual Interference Encoding (VIE)** module translates continuous robotic force/torque sensory data into event-driven Delta Tracking. The culture only receives an electrical shock when physical parameters *change*, drastically improving Signal-to-Noise Ratio (SNR) and completely preventing global overstimulation seizures.
+### 1. Critical Control Loop Fixes
+*   **Double Action Scaling Bug**: Resolved an issue where actions were scaled twice in both the Agent loop and the Antagonistic Decoder, which previously caused the robotic arm to stall.
+*   **GymWrapper Flattening Fix**: Bypassed GymWrapper observation flattening inside `extract_obs`. This restores access to structured observation dictionaries (native force, torque, and target vector values) from the MuJoCo simulation.
+*   **Action Bias Normalization**: Replaced an unconditioned, exponentially growing `action_bias` update with a bounded, clipped heuristic to prevent motor command divergence.
 
-### 3. Closed-Loop Homeostasis
-Biological tissue exhausts if constantly stimulated. Channel adaptation (`channel_gain`) is physically hooked into the stimulation amplitude and burst frequency, dynamically preventing cellular fatigue and cell death while preserving sensitive pathways.
+### 2. SDK Integration & Robustness
+*   **Idempotent Context Management**: Fixed a double-close bug in the `cl_open()` context manager that caused `ClosedNodeError` crashes in PyTables on exit. The `Neurons.close()` method is now monkeypatched to be fully idempotent.
+*   **STDP Plasticity Sign Inversion**: Corrected a biological STDP bug in the mock neuron simulator where Pre-before-Post spikes incorrectly triggered long-term depression (LTD) instead of long-term potentiation (LTP).
+*   **NumPy 2.x Compatibility**: Added shims to support running with NumPy 2.x, silencing internal deprecation warnings from the legacy parts of the `cl-sdk`.
 
-### 4. Antagonistic Decoding
-Motor output follows the biological **flexor/extensor antagonistic** principle. 
-The 64 channels are perfectly balanced and mapped across the 7-DoF spatial and gripper dimensions. It reads the raw electrical spikes from the living cells, balances the competing signals, and outputs smooth mechanical motion.
+### 3. Scientific Rigor & Benchmarking
+*   **FEP Terminology Alignment**: Deep-cleaned the codebase to replace reward-centric terminology (like "Dopamine Injection" and "Punishment") with information-theoretic terminology ("Predictable Stimulation" and "Unpredictable Stimulation"), aligning with the Free Energy Principle.
+*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](file:///Users/azur/Desktop/github_repo/run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](file:///Users/azur/Desktop/github_repo/plot_ablations.py)). It runs paired-seed trials to compare the biological agent against control groups (no-stim, zero-spikes, and randomized-spikes).
+*   **Fair Baseline Comparison**: Removed hindsight experience replay (HER) reward injection during the PPO evaluation loop to guarantee a scientifically honest comparison between biological and silicon baselines.
 
 ---
 
 ## Quick Start
 
-### Hardware Requirements
-You do **NOT** strictly need access to Cortical Labs CL1 biological hardware to run the code. If hardware is not detected, the system will automatically fall back to the official `cl-sdk` simulator mode.
-
+### 1. Installation
+Install the necessary simulator and reinforcement learning baselines:
 ```bash
-# Clone and install
 git clone https://github.com/AzurLiu/Senxe-Cerebellum.git
 cd Senxe-Cerebellum
 pip install -r requirements.txt
 pip install cl-sdk
+```
 
-# Set MuJoCo renderer (macOS)
+### 2. Configure MuJoCo Backend (macOS)
+```bash
 export MUJOCO_GL=glfw
+```
 
-# Run the biological assembly benchmark
+### 3. Run the Biological Benchmark
+Run the primary training script:
+```bash
 python senxe_demo_robosuite.py
 ```
+This script runs the 7-DoF Franka Panda robot arm task, trains the biological agent, and saves a Cyberpunk-styled video overlay `cl1_nutassembly.mp4` displaying the MEA grid, force telemetry, and live status watermarks.
 
----
-
-## Output Artifacts
-
-| File | Description |
-|:---:|:---|
-| `cl1_nutassembly.mp4` | CL1 bio-agent execution video with Cyberpunk F/T Bloom HUD overlay. |
-
-*(Note: Generating a true biological video requires connecting to the physical CL1 hardware; otherwise, it will generate a simulated version).*
-
----
-
-## Architecture
-
-### Biological Control Pipeline
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                    SENXE CONTROL LOOP                            │
-│                                                                 │
-│  ┌──────────┐    ┌─────────┐    ┌──────────────┐    ┌────────┐ │
-│  │ RoboSuite│───▶│   VIE   │───▶│  64-ch MEA   │───▶│Antagon.│ │
-│  │  Sensors │    │ Encoder │    │ (Real CL1)   │    │Decoder │ │
-│  │ F/T, Pos │    │(Sparse) │    │              │    │        │ │
-│  └──────────┘    └─────────┘    └──────┬───────┘    └───┬────┘ │
-│       ▲                                │                │      │
-│       │                          ┌─────▼─────┐    ┌─────▼────┐ │
-│       │                          │ Predictable / │    │  Action  │ │
-│       └──────────────────────────│ Unpredictable Stimulus │◀───│  Output  │ │
-│              (env.step)          │ Injection  │    │ (7D OSC) │ │
-│                                  └─────┬─────┘    └──────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+### 4. Run the Ablation Study
+To run the automated information-nullification benchmark:
+```bash
+python run_ablation_benchmark.py
+python plot_ablations.py
 ```
+This will run headless control trials and save a learning curve comparison to `ablation_plot.png`.
 
 ---
 
-## Author
+## Author & License
 
-**Azur (Jiahao)** — 18-year-old independent developer, incoming University of Alberta student.
-
-Built from scratch as an exploration into biological computation and neural motor control for industrial robotics. This project represents a first-principles approach to neuromorphic engineering: rather than training artificial networks to approximate biological dynamics, Cerebellum interfaces directly with living biological neural tissue to solve real-world motor control problems.
-
----
-
-Copyright © 2026 Azur (Jiahao). Licensed under the MIT License.
+*   **Author**: Azur (Jiahao) — Independent developer, incoming University of Alberta student.
+*   **License**: Licensed under the MIT License (changed from AGPL v3 in June 2026).
