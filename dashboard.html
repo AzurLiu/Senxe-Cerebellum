@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Senxe Cerebellum — Biological Telemetry Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Outfit:wght@300;400;600&family=Source+Code+Pro:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #060814;
+            --bg-panel: rgba(13, 20, 47, 0.45);
+            --border-glow: rgba(0, 242, 254, 0.2);
+            --primary: #00f2fe;
+            --secondary: #4facfe;
+            --alert: #ff4757;
+            --green: #2ecc71;
+            --text-main: #e2e8f0;
+            --text-muted: #8a99ad;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(79, 172, 254, 0.05) 0%, transparent 40%);
+            min-height: 100vh;
+            overflow-x: hidden;
+            padding: 24px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 24px;
+        }
+
+        .brand h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 26px;
+            letter-spacing: 2px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 900;
+        }
+
+        .brand p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .controls-top {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn {
+            background: rgba(0, 242, 254, 0.1);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: 'Orbitron', sans-serif;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .btn:hover {
+            background: var(--primary);
+            color: var(--bg-base);
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: none;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 380px 1fr 380px;
+            gap: 24px;
+        }
+
+        @media (max-width: 1200px) {
+            .grid-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-panel);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border-glow);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        }
+
+        .card-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 14px;
+            letter-spacing: 1px;
+            color: var(--primary);
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        /* MEA Electrode Grid */
+        .mea-grid-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+
+        .mea-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 16px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            max-width: 420px;
+            width: 100%;
+            aspect-ratio: 1;
+        }
+
+        .electrode {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-family: 'Source Code Pro', monospace;
+            color: rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            border: 1px solid transparent;
+        }
+
+        .electrode:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(0, 242, 254, 0.05);
+        }
+
+        .electrode.active {
+            background: radial-gradient(circle, var(--primary) 0%, rgba(0, 242, 254, 0.2) 70%);
+            box-shadow: 0 0 12px var(--primary);
+            color: #000;
+            font-weight: 700;
+            border-color: var(--primary);
+        }
+
+        .electrode.stim {
+            background: radial-gradient(circle, var(--alert) 0%, rgba(255, 71, 87, 0.2) 70%);
+            box-shadow: 0 0 12px var(--alert);
+            color: #fff;
+            border-color: var(--alert);
+        }
+
+        /* Telemetry Readouts */
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 13px;
+        }
+
+        .telemetry-label {
+            color: var(--text-muted);
+        }
+
+        .telemetry-value {
+            font-family: 'Source Code Pro', monospace;
+            font-weight: 600;
+        }
+
+        .telemetry-value.glow-cyan {
+            color: var(--primary);
+            text-shadow: 0 0 8px rgba(0, 242, 254, 0.5);
+        }
+
+        .telemetry-value.glow-green {
+            color: var(--green);
+            text-shadow: 0 0 8px rgba(46, 204, 113, 0.5);
+        }
+
+        .telemetry-value.glow-red {
+            color: var(--alert);
+            text-shadow: 0 0 8px rgba(255, 71, 87, 0.5);
+        }
+
+        /* Progress bars */
+        .progress-bar-wrapper {
+            margin: 12px 0;
+        }
+
+        .progress-bar-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .progress-bar-bg {
+            background: rgba(255, 255, 255, 0.05);
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            background: linear-gradient(90deg, var(--secondary), var(--primary));
+            height: 100%;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        /* Custom Waveform Scope */
+        .canvas-scope {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            width: 100%;
+            height: 140px;
+            margin-top: 10px;
+        }
+
+        /* Dynamic Timeline Controls */
+        .timeline-controls {
+            margin-top: 24px;
+            grid-column: 1 / -1;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-glow);
+            border-radius: 12px;
+            padding: 16px 24px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .play-btn {
+            background: var(--primary);
+            color: #000;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .play-btn:hover {
+            transform: scale(1.08);
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.5);
+        }
+
+        .slider-wrapper {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .slider-bar {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            cursor: pointer;
+        }
+
+        .slider-bar::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            box-shadow: 0 0 10px var(--primary);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+
+        .slider-bar::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* File Upload */
+        .upload-zone {
+            border: 2px dashed rgba(0, 242, 254, 0.2);
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 12px;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--primary);
+            background: rgba(0, 242, 254, 0.02);
+            color: var(--text-main);
+        }
+
+        #file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand">
+            <h1>SENXE CEREBELLUM</h1>
+            <p>Closed-Loop Neural Telemetry & Playback Dashboard</p>
+        </div>
+        <div class="controls-top">
+            <button class="btn" onclick="switchMode('nutassembly')">NutAssembly Demo</button>
+            <button class="btn btn-secondary" onclick="switchMode('legacy')">Legacy Mode</button>
+        </div>
+    </header>
+
+    <div class="grid-container">
+        
+        <!-- Left Column: Sensory Input / Environment -->
+        <div class="card">
+            <div class="card-title">
+                <span>SENSORY INPUT</span>
+                <span class="card-subtitle" id="sensor-sub">ROBOSUITE NUTASSEMBLY</span>
+            </div>
+            
+            <div id="robosuite-readouts">
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Active Target</span>
+                    <span class="telemetry-value glow-cyan" id="target-type">NUT (SquareNut)</span>
+                </div>
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Peg-to-Hole Distance</span>
+                    <span class="telemetry-value" id="val-dist">0.100 m</span>
+                </div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-label">
+                        <span>Peg Distance</span>
+                        <span id="pct-dist">100%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="bar-dist" style="width: 100%"></div>
+                    </div>
+                </div>
+                
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Force Magnitude</span>
+                    <span class="telemetry-value" id="val-force">0.12 N</span>
+                </div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-label">
+                        <span>Force (Safety: 20N)</span>
+                        <span id="pct-force">1%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="bar-force" style="width: 1%"></div>
+                    </div>
+                </div>
+
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Torque Magnitude</span>
+                    <span class="telemetry-value" id="val-torque">0.02 N·m</span>
+                </div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-label">
+                        <span>Torque (Safety: 5N·m)</span>
+                        <span id="pct-torque">0%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="bar-torque" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="legacy-readouts" style="display: none;">
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Pressure Input</span>
+                    <span class="telemetry-value glow-cyan" id="leg-pressure">0.000</span>
+                </div>
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Friction Raw</span>
+                    <span class="telemetry-value" id="leg-friction">0.000</span>
+                </div>
+                <div class="telemetry-row">
+                    <span class="telemetry-label">Dynamic Threshold</span>
+                    <span class="telemetry-value glow-red" id="leg-threshold">0.220</span>
+                </div>
+                
+                <div class="upload-zone" onclick="document.getElementById('file-input').click()">
+                    Drag & Drop or Click to Load Session CSV
+                    <input type="file" id="file-input" accept=".csv" onchange="handleFileUpload(event)">
+                </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <div class="card-subtitle">Sensor Oscilloscope</div>
+                <canvas id="scope-canvas" class="canvas-scope" width="340" height="140"></canvas>
+            </div>
+        </div>
+
+        <!-- Center Column: Biological Neural Interface (MEA Grid) -->
+        <div class="card">
+            <div class="card-title">
+                <span>MICROELECTRODE ARRAY (64-CH)</span>
+                <span class="card-subtitle" id="mea-sub">LIVE SPIKING ACTIVITIES</span>
+            </div>
+            <div class="mea-grid-wrapper">
+                <div class="mea-grid" id="mea-grid-container">
+                    <!-- 64 Electrodes will be dynamically populated here -->
+                </div>
+                <div class="telemetry-row" style="width: 100%; max-width: 420px; margin-top: 16px; border: none;">
+                    <span class="telemetry-label" id="channel-hover-desc">Hover over a channel to inspect physical mapping</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Control Policy & Decoder -->
+        <div class="card">
+            <div class="card-title">
+                <span>MOTOR DECODER & GATE</span>
+                <span class="card-subtitle">ANTAGONISTIC ACTUATION</span>
+            </div>
+            
+            <div class="telemetry-row">
+                <span class="telemetry-label">Antagonistic Decoder</span>
+                <span class="telemetry-value glow-green">7D Joint Output</span>
+            </div>
+
+            <div class="telemetry-row">
+                <span class="telemetry-label">Action Vector Norm</span>
+                <span class="telemetry-value" id="val-act-norm">0.000</span>
+            </div>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar-label">
+                    <span>Actuation Magnitude</span>
+                    <span id="pct-act">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-act" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="telemetry-row">
+                <span class="telemetry-label">Physical Disturbance (PDI)</span>
+                <span class="telemetry-value" id="val-pdi">0.500</span>
+            </div>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar-label">
+                    <span>Explore / Exploit Balance</span>
+                    <span id="lbl-pdi-explore">EXPLORE (PDI = 0.50)</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-pdi" style="width: 25%"></div>
+                </div>
+            </div>
+
+            <div class="telemetry-row">
+                <span class="telemetry-label">Intrinsic Curiosity</span>
+                <span class="telemetry-value" id="val-curiosity">1.000</span>
+            </div>
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar-label">
+                    <span>Novelty Multiplier</span>
+                    <span id="lbl-curiosity">100%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-curiosity" style="width: 50%"></div>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <div class="card-subtitle">Neural State Space (Exploration Plot)</div>
+                <canvas id="state-canvas" class="canvas-scope" width="340" height="140"></canvas>
+            </div>
+        </div>
+
+        <!-- Bottom Row: Timeline Slider -->
+        <div class="timeline-controls">
+            <button class="play-btn" id="play-button" onclick="togglePlay()">
+                <!-- SVG Play Symbol -->
+                <svg id="play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </button>
+            <div class="slider-wrapper">
+                <div class="slider-header">
+                    <span>TRAJECTORY TIMELINE</span>
+                    <span id="timeline-step">STEP: 0 / 100</span>
+                </div>
+                <input type="range" class="slider-bar" id="timeline-slider" min="0" max="99" value="0" oninput="seek(this.value)">
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let currentMode = 'nutassembly';
+        let isPlaying = false;
+        let playInterval = null;
+        let currentStep = 0;
+        let maxSteps = 100;
+        
+        let telemetryData = [];
+        let sensorHistory = [];
+        let stateSpaceHistory = [];
+
+        // 64 channel labels mapping for hover
+        const channelMappings = {
+            force: Array.from({length: 12}, (_, i) => `CH ${i}: Force Axis ${Math.floor(i/4)} Delta (${i%4 < 2 ? '+' : '-'})`),
+            torque: Array.from({length: 12}, (_, i) => `CH ${12+i}: Torque Axis ${Math.floor(i/4)} Delta (${i%4 < 2 ? '+' : '-'})`),
+            velocity: Array.from({length: 4}, (_, i) => `CH ${24+i}: Velocity Axis ${i}`),
+            spatial: Array.from({length: 27}, (_, i) => `CH ${28+i}: Target Axis ${Math.floor(i/9)} Tuning Bin ${i%9}`),
+            state: Array.from({length: 5}, (_, i) => `CH ${55+i}: Attention State Flag ${i}`),
+            reserved: Array.from({length: 4}, (_, i) => `CH ${60+i}: Reserved Channel ${i}`)
+        };
+
+        const flatChannelMappings = [
+            ...channelMappings.force,
+            ...channelMappings.torque,
+            ...channelMappings.velocity,
+            ...channelMappings.spatial,
+            ...channelMappings.state,
+            ...channelMappings.reserved
+        ];
+
+        // Generate mock NutAssembly data trajectory
+        function generateNutAssemblyMock() {
+            let data = [];
+            for (let i = 0; i < 100; i++) {
+                let step = {};
+                // stage changes halfway
+                step.stage = i < 40 ? 0 : 1;
+                step.dist = step.stage === 0 ? Math.max(0.01, 0.12 - i * 0.003) : Math.max(0.001, 0.05 - (i-40) * 0.001);
+                step.force = i < 40 ? 0.12 + Math.random()*0.1 : 5.2 + (i-40)*0.2 + (Math.random()*1.5);
+                step.torque = i < 40 ? 0.02 + Math.random()*0.02 : 1.2 + Math.random()*0.3;
+                step.act_norm = i < 10 ? 0.02 : Math.max(0.1, 0.45 - (i * 0.003)) + Math.random()*0.05;
+                step.pdi = Math.max(0.02, 1.2 - i * 0.015) + Math.random()*0.08;
+                step.curiosity = Math.max(0.1, 1.0 - i * 0.012) + Math.random()*0.05;
+                
+                // firing active channels
+                let spikes = [];
+                let n_spikes = 5 + Math.floor(Math.random() * 8);
+                // Active channels depend on phase and parameters
+                if (step.stage === 0) {
+                    // spatial channels for target axis
+                    spikes.push(28 + Math.floor(Math.random()*9));
+                    spikes.push(37 + Math.floor(Math.random()*9));
+                } else {
+                    // force and torque channels active
+                    spikes.push(Math.floor(Math.random()*12));
+                    spikes.push(12 + Math.floor(Math.random()*12));
+                }
+                // add state flags
+                spikes.push(55 + step.stage);
+                
+                // add miscellaneous random spikes
+                for (let k = 0; k < n_spikes; k++) {
+                    spikes.push(Math.floor(Math.random() * 64));
+                }
+                step.spikes = Array.from(new Set(spikes));
+                data.push(step);
+            }
+            return data;
+        }
+
+        // Initialize MEA grid UI
+        function buildMEAGrid() {
+            const container = document.getElementById('mea-grid-container');
+            container.innerHTML = '';
+            for (let i = 0; i < 64; i++) {
+                const el = document.createElement('div');
+                el.className = 'electrode';
+                el.id = `el-${i}`;
+                el.innerText = i;
+                
+                el.addEventListener('mouseover', () => {
+                    document.getElementById('channel-hover-desc').innerText = flatChannelMappings[i] || `CH ${i}`;
+                });
+                el.addEventListener('mouseout', () => {
+                    document.getElementById('channel-hover-desc').innerText = 'Hover over a channel to inspect physical mapping';
+                });
+                container.appendChild(el);
+            }
+        }
+
+        function switchMode(mode) {
+            currentMode = mode;
+            currentStep = 0;
+            isPlaying = false;
+            clearInterval(playInterval);
+            document.getElementById('play-icon').innerHTML = '<path d="M8 5v14l11-7z"/>';
+            
+            if (mode === 'nutassembly') {
+                document.getElementById('sensor-sub').innerText = 'ROBOSUITE NUTASSEMBLY';
+                document.getElementById('mea-sub').innerText = 'LIVE SPIKING ACTIVITIES';
+                document.getElementById('robosuite-readouts').style.display = 'block';
+                document.getElementById('legacy-readouts').style.display = 'none';
+                telemetryData = generateNutAssemblyMock();
+                maxSteps = 100;
+            } else {
+                document.getElementById('sensor-sub').innerText = 'SENSE LEGACY SESSION';
+                document.getElementById('mea-sub').innerText = '4X4 NEURAL GRID ENVELOPE';
+                document.getElementById('robosuite-readouts').style.display = 'none';
+                document.getElementById('legacy-readouts').style.display = 'block';
+                // Mock legacy session until uploaded
+                telemetryData = generateLegacyMock();
+                maxSteps = 100;
+            }
+            
+            document.getElementById('timeline-slider').max = maxSteps - 1;
+            document.getElementById('timeline-slider').value = 0;
+            seek(0);
+        }
+
+        function generateLegacyMock() {
+            let data = [];
+            for (let i = 0; i < 100; i++) {
+                let step = {};
+                step.pressure = 0.005 + (i < 50 ? i*0.015 : 0.75 - (i-50)*0.015);
+                step.friction = i > 40 && i < 60 ? 0.35 + Math.random()*0.15 : Math.random()*0.02;
+                step.threshold = Math.min(0.7, 0.22 + step.pressure * 0.15);
+                step.spike = (step.pressure * 12 + step.friction * 4800 > step.threshold * 40) && (Math.random() > 0.4) ? 1 : 0;
+                data.push(step);
+            }
+            return data;
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                parseCSV(text);
+            };
+            reader.readAsText(file);
+        }
+
+        function parseCSV(text) {
+            const lines = text.split('\n');
+            if (lines.length < 2) return;
+            
+            let parsed = [];
+            for (let i = 1; i < lines.length; i++) {
+                const parts = lines[i].split(',');
+                if (parts.length < 5) continue;
+                parsed.push({
+                    time: parseFloat(parts[0]),
+                    pressure: parseFloat(parts[1]),
+                    friction: parseFloat(parts[2]),
+                    threshold: parseFloat(parts[3]),
+                    spike: parseInt(parts[4])
+                });
+            }
+            
+            if (parsed.length > 0) {
+                telemetryData = parsed;
+                maxSteps = parsed.length;
+                document.getElementById('timeline-slider').max = maxSteps - 1;
+                document.getElementById('timeline-slider').value = 0;
+                currentStep = 0;
+                seek(0);
+                alert(`Loaded ${maxSteps} steps from legacy CSV file successfully!`);
+            }
+        }
+
+        function seek(step) {
+            currentStep = parseInt(step);
+            document.getElementById('timeline-step').innerText = `STEP: ${currentStep} / ${maxSteps}`;
+            
+            const stepData = telemetryData[currentStep];
+            if (!stepData) return;
+
+            if (currentMode === 'nutassembly') {
+                // Update text fields
+                document.getElementById('target-type').innerText = stepData.stage === 0 ? "NUT (SquareNut)" : "PEG (Peg1 Hole)";
+                document.getElementById('val-dist').innerText = `${stepData.dist.toFixed(3)} m`;
+                document.getElementById('pct-dist').innerText = `${Math.min(100, Math.floor(stepData.dist / 0.12 * 100))}%`;
+                document.getElementById('bar-dist').style.width = `${Math.min(100, Math.floor(stepData.dist / 0.12 * 100))}%`;
+
+                document.getElementById('val-force').innerText = `${stepData.force.toFixed(2)} N`;
+                document.getElementById('pct-force').innerText = `${Math.min(100, Math.floor(stepData.force / 20 * 100))}%`;
+                document.getElementById('bar-force').style.width = `${Math.min(100, Math.floor(stepData.force / 20 * 100))}%`;
+
+                document.getElementById('val-torque').innerText = `${stepData.torque.toFixed(2)} N·m`;
+                document.getElementById('pct-torque').innerText = `${Math.min(100, Math.floor(stepData.torque / 5 * 100))}%`;
+                document.getElementById('bar-torque').style.width = `${Math.min(100, Math.floor(stepData.torque / 5 * 100))}%`;
+
+                // Update right panel
+                document.getElementById('val-act-norm').innerText = stepData.act_norm.toFixed(3);
+                document.getElementById('pct-act').innerText = `${Math.floor(stepData.act_norm * 100)}%`;
+                document.getElementById('bar-act').style.width = `${Math.floor(stepData.act_norm * 100)}%`;
+
+                document.getElementById('val-pdi').innerText = stepData.pdi.toFixed(3);
+                document.getElementById('bar-pdi').style.width = `${Math.min(100, Math.floor(stepData.pdi / 2.0 * 100))}%`;
+                document.getElementById('lbl-pdi-explore').innerText = stepData.pdi > 0.5 ? `EXPLORE (PDI = ${stepData.pdi.toFixed(2)})` : `EXPLOIT (PDI = ${stepData.pdi.toFixed(2)})`;
+
+                document.getElementById('val-curiosity').innerText = stepData.curiosity.toFixed(3);
+                document.getElementById('bar-curiosity').style.width = `${Math.min(100, Math.floor(stepData.curiosity / 2.0 * 100))}%`;
+                document.getElementById('lbl-curiosity').innerText = `${Math.floor(stepData.curiosity / 2.0 * 100)}%`;
+
+                // Highlight active electrodes
+                document.querySelectorAll('.electrode').forEach((el, idx) => {
+                    el.className = 'electrode';
+                    if (stepData.spikes.includes(idx)) {
+                        // random select stim vs spike
+                        el.classList.add(idx < 24 && Math.random() > 0.5 ? 'stim' : 'active');
+                    }
+                });
+
+                // Update scope canvas history
+                sensorHistory.push(stepData.dist);
+                if (sensorHistory.length > 100) sensorHistory.shift();
+
+                stateSpaceHistory.push([stepData.pdi, stepData.curiosity]);
+                if (stateSpaceHistory.length > 50) stateSpaceHistory.shift();
+
+            } else {
+                // Legacy Mode
+                document.getElementById('leg-pressure').innerText = stepData.pressure.toFixed(3);
+                document.getElementById('leg-friction').innerText = stepData.friction.toFixed(3);
+                document.getElementById('leg-threshold').innerText = stepData.threshold.toFixed(3);
+
+                // Highlight 4x4 matrix representing the leaky integrator potential
+                let v = Math.min(1.0, stepData.pressure * 1.2 + stepData.friction * 2.0);
+                let cellsToFill = Math.floor(v * 16);
+                
+                document.querySelectorAll('.electrode').forEach((el, idx) => {
+                    el.className = 'electrode';
+                    // only map inside first 16 channels for 4x4 grid
+                    if (idx < 16) {
+                        if (stepData.spike && idx === 0) {
+                            el.classList.add('stim'); // Spiked!
+                        } else if (idx < cellsToFill) {
+                            el.classList.add('active');
+                        }
+                    }
+                });
+
+                sensorHistory.push(stepData.pressure);
+                if (sensorHistory.length > 100) sensorHistory.shift();
+
+                stateSpaceHistory.push([stepData.pressure, stepData.friction]);
+                if (stateSpaceHistory.length > 50) stateSpaceHistory.shift();
+            }
+
+            drawOscilloscopes();
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('play-button');
+            const icon = document.getElementById('play-icon');
+            
+            if (isPlaying) {
+                icon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>'; // pause icon
+                playInterval = setInterval(() => {
+                    currentStep = (currentStep + 1) % maxSteps;
+                    document.getElementById('timeline-slider').value = currentStep;
+                    seek(currentStep);
+                }, 100);
+            } else {
+                icon.innerHTML = '<path d="M8 5v14l11-7z"/>'; // play icon
+                clearInterval(playInterval);
+            }
+        }
+
+        function drawOscilloscopes() {
+            // Draw Sensor Scope
+            const scope = document.getElementById('scope-canvas');
+            const ctx1 = scope.getContext('2d');
+            ctx1.clearRect(0, 0, scope.width, scope.height);
+            ctx1.strokeStyle = '#00f2fe';
+            ctx1.lineWidth = 2.5;
+            ctx1.beginPath();
+            
+            let step = scope.width / 100;
+            for (let i = 0; i < sensorHistory.length; i++) {
+                let y = scope.height - (sensorHistory[i] * (scope.height * 0.8) + 10);
+                if (i === 0) ctx1.moveTo(i * step, y);
+                else ctx1.lineTo(i * step, y);
+            }
+            ctx1.stroke();
+
+            // Draw State Map
+            const map = document.getElementById('state-canvas');
+            const ctx2 = map.getContext('2d');
+            ctx2.clearRect(0, 0, map.width, map.height);
+            
+            // Draw points
+            for (let i = 0; i < stateSpaceHistory.length; i++) {
+                let p = stateSpaceHistory[i];
+                let alpha = (i / stateSpaceHistory.length) * 0.6;
+                ctx2.fillStyle = `rgba(255, 71, 87, ${alpha})`;
+                
+                let x, y;
+                if (currentMode === 'nutassembly') {
+                    x = (p[0] / 2.0) * map.width; // pdi
+                    y = map.height - (p[1] / 2.0) * map.height; // curiosity
+                } else {
+                    x = p[0] * map.width; // pressure
+                    y = map.height - p[1] * 10 * map.height; // friction
+                }
+                ctx2.beginPath();
+                ctx2.arc(x, y, 4, 0, Math.PI * 2);
+                ctx2.fill();
+            }
+        }
+
+        // Initialize
+        buildMEAGrid();
+        switchMode('nutassembly');
+
+    </script>
+</body>
+</html>
