@@ -57,6 +57,10 @@ class VIE:
         self.neurons = neurons
         self.env = env
 
+    def reset(self):
+        # Legacy VIE has no temporal state, so reset is a no-op
+        pass
+
     def encode(self, obs, goal):
         if isinstance(obs, dict):
             grip_pos = obs.get("observation", np.zeros(25))[:3]
