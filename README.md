@@ -18,23 +18,23 @@ The framework maps multi-modal physical sensor readings (force, torque, kinemati
 ## Core Scientific Modules
 
 ### 1. Neuromorphic Event-Driven Sparse Coding (VIE)
-The **Virtual Interference Encoding (VIE)** module ([core/vie.py](file:///Users/azur/Desktop/github_repo/core/vie.py)) maps continuous environment observations onto the 64-channel microelectrode array (MEA). 
+The **Virtual Interference Encoding (VIE)** module ([core/vie.py](core/vie.py)) maps continuous environment observations onto the 64-channel microelectrode array (MEA). 
 *   **Sparse Encoding**: To minimize signal crosstalk and cellular overstimulation, sensory modalities (e.g., force/torque deltas) are encoded using delta-tracking. Electrodes are only stimulated when physical quantities change significantly.
 *   **Attention Multiplexing**: Channels are dynamically reallocated between visual/tactile sensory modalities based on the robot's current task phase (searching vs. inserting).
 
 ### 2. Antagonistic Muscle-Pair Decoding
-Motor outputs are decoded based on the biological flexor/extensor antagonistic principle ([core/decoder.py](file:///Users/azur/Desktop/github_repo/core/decoder.py)). 
+Motor outputs are decoded based on the biological flexor/extensor antagonistic principle ([core/decoder.py](core/decoder.py)). 
 *   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations (Even/Odd pairs). Each of the 7 action dimensions is driven by the differential activity:
     $$\text{Action}[i] = \frac{\text{flexor} - \text{extensor}}{\text{flexor} + \text{extensor} + \epsilon}$$
 *   **EMA Inertia Filter**: Outputs are smoothed using an Exponential Moving Average (EMA) filter to mimic the biomechanical damping and inertia of physical muscle tissue, producing jerk-free trajectories.
 
 ### 3. FEP-Driven Kinematic Gate (PDI)
-Rather than using hand-tuned exploration schedules, exploration is regulated by the **Physical Disturbance Index (PDI)** ([core/pdi.py](file:///Users/azur/Desktop/github_repo/core/pdi.py)). Inspired by the Free Energy Principle (FEP):
+Rather than using hand-tuned exploration schedules, exploration is regulated by the **Physical Disturbance Index (PDI)** ([core/pdi.py](core/pdi.py)). Inspired by the Free Energy Principle (FEP):
 *   **High PDI** (unstable kinematics, high sensory surprise) increases Gaussian perturbation to force exploration and surprise minimization.
 *   **Low PDI** (stable kinematics, low surprise) limits perturbation to exploit the current steady-state control policy.
 
 ### 4. Intrinsic Firing-Rate Curiosity
-The **Neural Curiosity** module ([core/curiosity.py](file:///Users/azur/Desktop/github_repo/core/curiosity.py)) monitors firing pattern novelty. Novel electrophysiological patterns boost the exploration rate, driving the neural network to escape local minima in silent or repetitive states.
+The **Neural Curiosity** module ([core/curiosity.py](core/curiosity.py)) monitors firing pattern novelty. Novel electrophysiological patterns boost the exploration rate, driving the neural network to escape local minima in silent or repetitive states.
 
 ---
 
@@ -114,7 +114,7 @@ Since the initial release (`a1057ea` on April 13, 2026), the framework has under
 
 ### 3. Scientific Rigor & Benchmarking
 *   **FEP Terminology Alignment**: Deep-cleaned the codebase to replace reward-centric terminology (like "Dopamine Injection" and "Punishment") with information-theoretic terminology ("Predictable Stimulation" and "Unpredictable Stimulation"), aligning with the Free Energy Principle.
-*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](file:///Users/azur/Desktop/github_repo/run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](file:///Users/azur/Desktop/github_repo/plot_ablations.py)). It runs paired-seed trials to compare the biological agent against control groups (no-stim, zero-spikes, and randomized-spikes).
+*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against control groups (no-stim, zero-spikes, and randomized-spikes).
 *   **Fair Baseline Comparison**: Removed hindsight experience replay (HER) reward injection during the PPO evaluation loop to guarantee a scientifically honest comparison between biological and silicon baselines.
 
 ---
