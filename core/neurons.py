@@ -280,9 +280,9 @@ class MockNeurons:
         for ch in range(self.n_channels):
             dt = self._last_stim_time[ch] - self._last_spike_time[ch]
             if abs(dt) < 50:  # Within STDP timing window
-                # Pre-before-post (dt < 0) → LTP direction
-                # Post-before-pre (dt > 0) → LTD direction
-                stdp_sign = -1.0 if dt < 0 else 1.0
+                # Pre-before-post (dt < 0) → LTP direction (strengthen)
+                # Post-before-pre (dt > 0) → LTD direction (weaken)
+                stdp_sign = 1.0 if dt < 0 else -1.0
                 # Reward modulates magnitude and can flip sign
                 plasticity = 0.005 * stdp_sign * (1.0 + self._reward_trace)
                 self.sensitivity[ch] += plasticity
