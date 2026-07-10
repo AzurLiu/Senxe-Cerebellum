@@ -12,7 +12,7 @@ import imageio, cv2
 from tqdm import tqdm
 from collections import deque
 
-from core.neurons import cl_open, warmup_calibration, ChannelSet, StimDesign, BurstDesign
+from core.neurons import cl_open, warmup_calibration, is_cl_simulator, ChannelSet, StimDesign, BurstDesign
 from core.decoder import AntagonisticDecoder
 from core.pdi import PDI
 from core.curiosity import NeuralCuriosity
@@ -180,12 +180,9 @@ class CL1Agent:
                     min_h = float(health_full.min()) if health_full is not None else 1.0
                     sr = np.mean(ep_successes) * 100
                     fsr = np.mean(ep_force_safe) * 100
-                    frame = draw_overlay(frame, ep_num, total_reward, pdi_val, min_h, cur_fr,
-                                         step_rewards, distance=cur_dist, force_mag=force_mag,
-                                         torque_mag=torque_mag, depth=depth,
-                                         success_rate=sr, force_safe_rate=fsr,
-                                         force_vec=obs_info["force"], health_arr=health_full,
-                                         force_threshold=FORCE_SAFETY_THRESHOLD)
+                    frame = draw_overlay_wrapper(frame, ep_num, total_reward, pdi_val, min_h, cur_fr,
+                                         step_rewards, distance=cur_dist,
+                                         success_rate=sr, is_sim=is_cl_simulator())
                     frames_list.append(frame)
 
             if terminated or truncated: break
@@ -203,7 +200,8 @@ class CL1Agent:
 
     def train(self, num_episodes=EPISODES, record_last_n=RECORD_LAST_N):
         print("\n" + "=" * 60)
-        print("  CL1 Bio-Computer Training (Pure Wetware Mode)")
+        mode_str = "Simulator Mode" if is_cl_simulator() else "Pure Wetware Mode"
+        print("  CL1 Bio-Computer Training (" + mode_str + ")")
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
         
@@ -232,7 +230,12 @@ def main():
     np.random.seed(SEED)
     hud.reset()
     print("+" + "=" * 58 + "+")
-    print("|  Senxe Cerebellum v4.0 — Pure Biological Wetware          |")
+    if is_cl_simulator():
+        print("|  Senxe Cerebellum v4.0 — cl-sdk Simulator Mode            |")
+        print("|  [!] WARNING: Real CL1 hardware not detected.             |")
+        print("|      Falling back to official cl-sdk Poisson simulation.  |")
+    else:
+        print("|  Senxe Cerebellum v4.0 — Pure Biological Wetware          |")
     print("+" + "=" * 58 + "+\n")
 
     print("-" * 60); print("  Phase 0: Channel Warm-up Calibration"); print("-" * 60)

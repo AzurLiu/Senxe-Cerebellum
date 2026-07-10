@@ -26,7 +26,7 @@ import cv2
 from tqdm import tqdm
 from collections import deque
 
-from core.neurons import cl_open, warmup_calibration, ChannelSet, StimDesign, BurstDesign
+from core.neurons import cl_open, warmup_calibration, is_cl_simulator, ChannelSet, StimDesign, BurstDesign
 from core.decoder import AntagonisticDecoder
 from core.pdi import PDI
 from core.video import save_video
@@ -128,7 +128,7 @@ class VIE:
 
 
 # ═══ Real-time HUD Overlay (OpenCV) ═══
-def _overlay_text(frame, ep, reward, pdi, min_health, distance=0.0, success_rate=0.0, gripper_status=""):
+def _overlay_text(frame, ep, reward, pdi, min_health, distance=0.0, success_rate=0.0, gripper_status="", is_sim=False):
     lines = [
         f"Ep:{ep} R:{reward:.1f}",
         f"PDI:{pdi:.2f} H:{min_health:.2f}",
@@ -142,14 +142,20 @@ def _overlay_text(frame, ep, reward, pdi, min_health, distance=0.0, success_rate
     line_h    = 16
     x0, y0    = 6, 6
     box_w     = 160
-    box_h     = len(lines) * line_h + 8
+    box_h     = len(lines) * line_h + 24
 
     roi = frame[y0:y0+box_h, x0:x0+box_w].astype(np.float32)
     roi *= 0.25
     frame[y0:y0+box_h, x0:x0+box_w] = roi.astype(np.uint8)
 
+    sim_y = y0 + 13
+    if is_sim:
+        cv2.putText(frame, "[SIMULATOR MODE]", (x0 + 4, sim_y), font, scale - 0.05, (0, 0, 255), thickness, cv2.LINE_AA)
+    else:
+        cv2.putText(frame, "[PURE WETWARE]", (x0 + 4, sim_y), font, scale - 0.05, (0, 255, 0), thickness, cv2.LINE_AA)
+
     for i, line in enumerate(lines):
-        y = y0 + 13 + i * line_h
+        y = sim_y + 4 + (i + 1) * line_h
         cv2.putText(frame, line, (x0 + 4, y), font, scale, (0, 0, 0), thickness + 1, cv2.LINE_AA)
         cv2.putText(frame, line, (x0 + 4, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
@@ -226,9 +232,9 @@ def _overlay_reward_curve(frame, reward_history):
         for x in range(x_left, x_right, 8):
             cv2.line(frame, (x, zero_y), (min(x + 4, x_right), zero_y), (120, 120, 120), 1)
 
-def draw_overlay(frame, ep, reward, pdi, min_health, firing_rates, reward_history, distance=0.0, success_rate=0.0, gripper_status=""):
+def draw_overlay(frame, ep, reward, pdi, min_health, firing_rates, reward_history, distance=0.0, success_rate=0.0, gripper_status="", is_sim=False):
     frame = np.ascontiguousarray(frame)
-    _overlay_text(frame, ep, reward, pdi, min_health, distance=distance, success_rate=success_rate, gripper_status=gripper_status)
+    _overlay_text(frame, ep, reward, pdi, min_health, distance=distance, success_rate=success_rate, gripper_status=gripper_status, is_sim=is_sim)
     _overlay_bar_chart(frame, firing_rates)
     _overlay_reward_curve(frame, reward_history)
     return frame
@@ -314,7 +320,7 @@ class CL1Agent:
                         min_health = float(self.neurons.get_health().min())
                     cur_success_rate = np.mean(episode_successes) * 100 if episode_successes else 0.0
                     grip_status = "CLOSED" if gripper_is_closed else "OPEN"
-                    frame = draw_overlay(frame, ep_num, total_reward, pdi_val, min_health, cur_firing_rates, step_rewards, distance=cur_distance, success_rate=cur_success_rate, gripper_status=grip_status)
+                    frame = draw_overlay(frame, ep_num, total_reward, pdi_val, min_health, cur_firing_rates, step_rewards, distance=cur_distance, success_rate=cur_success_rate, gripper_status=grip_status, is_sim=is_cl_simulator())
                     frames.append(frame)
 
             if reward > -0.5:
@@ -361,7 +367,11 @@ class CL1Agent:
 # ═══ Main Entry Point ═══
 def main():
     print("+" + "=" * 58 + "+")
-    print("|  Senxe Cerebellum v3.0 -- Pure Wetware Interface           |")
+    if is_cl_simulator():
+        print("|  Senxe Cerebellum v3.0 -- cl-sdk Simulator Mode            |")
+        print("|  [!] WARNING: Real CL1 hardware not detected.              |")
+    else:
+        print("|  Senxe Cerebellum v3.0 -- Pure Wetware Interface           |")
     print("+" + "=" * 58 + "+\n")
 
     print("-" * 60)
