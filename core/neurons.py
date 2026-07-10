@@ -23,6 +23,7 @@ if not hasattr(np, 'concat'):
 try:
     import cl as _cl_sdk
     from cl import ChannelSet, StimDesign, BurstDesign
+    from cl.neurons import Neurons
     CL_AVAILABLE = True
 except ImportError:
     raise RuntimeError(
@@ -30,6 +31,16 @@ except ImportError:
         "This project requires the official Cortical Labs SDK (cl-sdk) to run. \n"
         "Please run: pip install cl-sdk"
     )
+
+# Monkeypatch cl.neurons.Neurons.close to be idempotent
+if CL_AVAILABLE:
+    _original_close = Neurons.close
+    def _idempotent_close(self):
+        if getattr(self, "_closed", False):
+            return
+        _original_close(self)
+        self._closed = True
+    Neurons.close = _idempotent_close
 
 def is_cl_simulator() -> bool:
     """Returns True if cl-sdk is running in simulation mode (no real CL1 hardware).
