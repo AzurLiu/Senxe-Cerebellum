@@ -35,6 +35,7 @@ from core.hud import draw_overlay, hud
 
 # ═══ Configuration ═══
 SEED            = 42
+AGENT_NAME      = "CL1 Bio" if CL_AVAILABLE else "Mock SNN"
 ENV_NAME        = "NutAssembly"
 ROBOT           = "Panda"
 CL1_EPISODES    = 200;  CL1_MAX_STEPS = 200
@@ -261,7 +262,7 @@ class CL1Agent:
     def train(self, num_episodes=CL1_EPISODES, record_last_n=RECORD_LAST_N):
         """Train the CL1 biological agent over multiple episodes."""
         print("\n" + "=" * 60)
-        print("  CL1 Bio-Computer Training (RoboSuite NutAssembly)")
+        print(f"  {AGENT_NAME}-Computer Training (RoboSuite NutAssembly)")
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
         backend = "Cortical Labs cl-sdk" if CL_AVAILABLE else "Built-in mock"
@@ -423,14 +424,14 @@ def plot_learning_curves(cl1_r, ppo_r, rnd_r, path=PLOT_FILE,
     ax.plot(ppo_r, alpha=0.12, color='#3498db')
     ax.plot(rnd_r, alpha=0.12, color='#95a5a6')
     ax.plot(range(off, off+len(cl1_s)), cl1_s, color='#e74c3c', lw=2.5,
-            label='CL1 Bio (VIE+Force/Torque+Predictable Stimulus)')
+            label=f'{AGENT_NAME} (VIE+Force/Torque+Predictable Stimulus)')
     ax.plot(range(off, off+len(ppo_s)), ppo_s, color='#3498db', lw=2.5,
             label='PPO Traditional RL')
     ax.plot(range(off, off+len(rnd_s)), rnd_s, color='#95a5a6', lw=2.0, ls='--',
             label='Random (baseline)')
 
     ax.set_title("Senxe Cerebellum v4.0 — RoboSuite NutAssembly (Native Force/Torque)\n"
-                 "CL1 Bio vs PPO vs Random: Industrial Assembly Sample Efficiency",
+                 f"{AGENT_NAME} vs PPO vs Random: Industrial Assembly Sample Efficiency",
                  fontsize=13, fontweight='bold', pad=15)
     ax.set_xlabel("Episode"); ax.set_ylabel("Reward")
     ax.legend(fontsize=10, loc='lower right'); ax.grid(True, alpha=0.3)
@@ -508,8 +509,8 @@ def main():
     print("\n" + "-" * 60); print("  Phase 4: Generating Videos"); print("-" * 60)
     save_video(cl1_frames, VIDEO_CL1, fps=VIDEO_FPS, target_seconds=20)
     make_side_by_side(cl1_frames, ppo_frames, VIDEO_SIDE, fps=VIDEO_FPS,
-                      left_label="CL1 Bio (Force/Torque)",
-                      right_label="PPO Traditional RL",
+                      left_label=f"{AGENT_NAME} (Force/Torque)",
+                      right_label="PPO (Traditional RL)",
                       center_label="NutAssembly")
 
     # Phase 5: Plot
