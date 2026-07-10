@@ -14,9 +14,13 @@ import numpy as np
 from contextlib import contextmanager
 from typing import Tuple
 
+import warnings
+
 # Compatibility shim: cl-sdk uses np.bool which was removed in numpy 2.0
-if not hasattr(np, 'bool'):
-    np.bool = np.bool_
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    if not hasattr(np, 'bool'):
+        np.bool = np.bool_
 if not hasattr(np, 'concat'):
     np.concat = np.concatenate
 
