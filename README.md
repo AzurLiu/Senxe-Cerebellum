@@ -7,36 +7,42 @@
 </p>
 
 <p align="center">
+  <a href="#what-is-this-project">What is this?</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#core-philosophy">Core Philosophy</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="LICENSE">MIT License</a>
+  <a href="#architecture">Architecture</a>
 </p>
 
 ---
 
+## What is this project?
+
 > *"What if we stopped training artificial networks to mimic biology — and just used the biology itself?"*
 
-**Senxe Cerebellum** is a 100% Pure Wetware control framework that directly interfaces **Cortical Labs CL1** biological neurons with the Franka Panda 7-DoF robotic arm. 
+Most modern robotics rely on Artificial Intelligence (like Deep Reinforcement Learning) running on silicon chips (GPUs) to control robotic arms. **Senxe Cerebellum takes a radically different approach: it replaces the AI with a living biological brain.**
 
-In v4.0, we have violently purged all Reinforcement Learning (PPO) baselines, `MockNeurons`, and software fallbacks. The system enforces a strict biological hardware dependency to solve the industrial **RoboSuite NutAssembly** task. It relies purely on physical force/torque sensors mapped to a 64-channel MEA (Microelectrode Array).
+This project is a software bridge that connects a **Cortical Labs CL1** — a physical microelectrode array (MEA) culturing hundreds of thousands of living biological neurons (a "mini-brain" or organoid) — directly to a 7-DoF industrial robotic arm (Franka Panda). 
+
+Instead of writing code to calculate how the robot should move, we stream physical sensations (force, torque, and spatial distance) directly into the living cells as electrical pulses. The biological neurons process this "pain" and "reward", and their natural electrical firing patterns (spikes) are decoded in real-time to physically move the robotic arm and assemble a nut onto a peg.
+
+**This is not a simulation. This is a 100% Pure Wetware interface.**
 
 ---
 
 ## Core Philosophy
 
 ### 1. Zero Software Fallbacks (Pure Biology)
-We do not simulate biology. The codebase strictly requires the Cortical Labs `cl-sdk`. If it is not a real biological organoid, the code will refuse to execute. We have eliminated all Deep Learning training wheels.
+We do not simulate biology. The codebase strictly requires the Cortical Labs `cl-sdk`. If you do not have physical access to a real biological organoid, the code will refuse to execute. We have violently purged all "Mock" simulators and Deep Learning (PPO) training wheels.
 
 ### 2. Neuromorphic Event-Driven Sparse Coding (VIE)
-The **Virtual Interference Encoding (VIE)** module translates continuous RoboSuite force/torque sensory data into event-driven Delta Tracking. The culture only fires when physical parameters *change*, drastically improving SNR and completely preventing global overstimulation seizures.
+The **Virtual Interference Encoding (VIE)** module translates continuous robotic force/torque sensory data into event-driven Delta Tracking. The culture only receives an electrical shock when physical parameters *change*, drastically improving Signal-to-Noise Ratio (SNR) and completely preventing global overstimulation seizures.
 
 ### 3. Closed-Loop Homeostasis
-Biological tissue exhausts if constantly stimulated. Channel adaptation (`channel_gain`) is physically hooked into the stimulation amplitude and burst frequency, dynamically preventing cellular fatigue while preserving sensitive pathways.
+Biological tissue exhausts if constantly stimulated. Channel adaptation (`channel_gain`) is physically hooked into the stimulation amplitude and burst frequency, dynamically preventing cellular fatigue and cell death while preserving sensitive pathways.
 
 ### 4. Antagonistic Decoding
 Motor output follows the biological **flexor/extensor antagonistic** principle. 
-The 64 channels are perfectly balanced and mapped across the 7-DoF spatial and gripper dimensions, eliminating dimensional dominance. 
+The 64 channels are perfectly balanced and mapped across the 7-DoF spatial and gripper dimensions. It reads the raw electrical spikes from the living cells, balances the competing signals, and outputs smooth mechanical motion.
 
 ---
 
@@ -72,24 +78,6 @@ python senxe_demo_robosuite.py
 ---
 
 ## Architecture
-
-### Project Structure
-
-```text
-senxe-cerebellum/
-├── senxe_demo_robosuite.py    # Main: RoboSuite NutAssembly (native F/T sensors)
-├── core/
-│   ├── neurons.py             # CL1 neural interface (Strict Hardware Enforced)
-│   ├── decoder.py             # Antagonistic motor decoding (flexor/extensor)
-│   ├── pdi.py                 # Physical Disturbance Index (FEP explore/exploit)
-│   ├── curiosity.py           # Neural intrinsic curiosity (firing-pattern novelty)
-│   ├── vie.py                 # Virtual Interference Encoding module
-│   ├── hud.py                 # HUD rendering and Bloom pipeline
-│   └── video.py               # Video generation utilities
-├── tests/
-│   └── test_core.py           # Unit tests
-└── README.md
-```
 
 ### Biological Control Pipeline
 
