@@ -79,8 +79,11 @@ def compute_insertion_depth(info):
 
 # ═══ CL1 Biological Agent ═══
 class CL1Agent:
-    def __init__(self, env, raw_env, neurons, channel_ranking=None, responsiveness=None):
+    def __init__(self, env, raw_env, neurons, channel_ranking=None, responsiveness=None,
+                 ablation_spike_mode="none", ablation_stim_mode="full"):
         self.env = env; self.raw_env = raw_env; self.neurons = neurons
+        self.ablation_spike_mode = ablation_spike_mode
+        self.ablation_stim_mode = ablation_stim_mode
         self.action_dim = env.action_space.shape[0]
         self.vie = VIE(neurons, force_threshold=FORCE_SAFETY_THRESHOLD,
                        depth_threshold=INSERTION_DEPTH_THRESHOLD, raw_env=raw_env)
@@ -101,11 +104,21 @@ class CL1Agent:
         # the percentile function from hallucinating spikes from Gaussian noise
         # when the culture is silent or dead.
         threshold = max(50.0, np.percentile(abs_frames, 99.5))
-        spike_channels = list(set(np.where(abs_frames > threshold)[1]))
+        real_spikes = list(set(np.where(abs_frames > threshold)[1]))
         firing_rates = np.mean(abs_frames, axis=0)
-        return spike_channels, firing_rates
+        
+        if self.ablation_spike_mode == "zero":
+            spikes = []
+        elif self.ablation_spike_mode == "random":
+            n = len(real_spikes)
+            spikes = np.random.choice(64, size=n, replace=False).tolist() if n else []
+        else:
+            spikes = real_spikes
+            
+        return spikes, firing_rates
 
     def _predictable_stim_inject(self, reward):
+        if self.ablation_stim_mode == "none": return
         if reward <= 0: return
         amp = np.clip(reward * 2.0, 0.5, 3.0)
         s = StimDesign(200, -amp, 200, amp)
@@ -113,6 +126,7 @@ class CL1Agent:
                           BurstDesign(PREDICTABLE_BURST_N, PREDICTABLE_BURST_HZ))
 
     def _unpredictable_stim_inject(self, penalty):
+        if self.ablation_stim_mode == "none": return
         if penalty >= 0: return
         amp = np.clip(abs(penalty) * 1.5, 0.3, 2.0)
         available = [ch for ch in range(64) if ch not in self.top_channels]
