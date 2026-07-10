@@ -36,19 +36,18 @@ class HUDState:
 hud = HUDState()
 _FORCE_EMA_ALPHA = 0.18                     # EMA coefficient: lower = smoother glide
 
-# ── Cold Cyberpunk 4-color semantic palette (RGB order) ──
-# Force=Ice Blue | Torque=Neon Cyan | Position=Magenta | Goal=Muted Amber
+# ── Medical Electrophysiology Semantic Palette (BGR order) ──
 _GROUP_COLORS = {
-    'force':    {'echo': (255, 255, 255), 'active': (180, 210, 255), 'inactive': (20, 30, 50)},
-    'torque':   {'echo': (255, 255, 255), 'active': (0,   255, 240), 'inactive': (5,  40, 38)},
-    'position': {'echo': (255, 255, 255), 'active': (220, 80,  220), 'inactive': (38, 12, 38)},
-    'goal':     {'echo': (255, 255, 255), 'active': (220, 185, 90),  'inactive': (40, 32, 12)},
+    'force':    {'echo': (255, 255, 255), 'active': (180, 140, 100), 'inactive': (35, 30, 25)}, # Steel Blue
+    'torque':   {'echo': (255, 255, 255), 'active': (160, 150, 40),  'inactive': (35, 30, 25)}, # Medical Teal
+    'position': {'echo': (255, 255, 255), 'active': (150, 150, 150), 'inactive': (35, 30, 25)}, # Slate Gray
+    'goal':     {'echo': (255, 255, 255), 'active': (80,  150, 220), 'inactive': (35, 30, 25)}, # Soft Amber
 }
 _CH_GROUP_MAP = ['force'] * 16 + ['torque'] * 16 + ['position'] * 16 + ['goal'] * 16
 
-# Bloom kernel size (must be odd). Larger = softer glow, more GPU-like feel.
-_BLOOM_KSIZE = 31
-_BLOOM_SIGMA = 12
+# Bloom kernel size (must be odd). Muted for clean electrophysiology style.
+_BLOOM_KSIZE = 15
+_BLOOM_SIGMA = 5
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -149,11 +148,11 @@ def _overlay_text(frame, ep, reward, pdi, min_health, glow_layer,
     # ── Safety classification ──
     fn = force_mag / force_threshold if force_threshold > 0 else 0
     if fn < 0.5:
-        status, s_color = "NOMINAL", (160, 220, 160)
+        status, s_color = "NOMINAL", (140, 180, 140)
     elif fn < 1.0:
-        status, s_color = "CAUTION", (220, 200, 80)
+        status, s_color = "CAUTION", (80, 160, 200)
     else:
-        status, s_color = "DANGER", (255, 80, 80)
+        status, s_color = "DANGER", (80, 80, 200)
 
     # ── Top-left HUD block (3 lines, larger + brighter for 720p legibility) ──
     lx, ly = 12, 22
@@ -357,10 +356,10 @@ _EVOLUTION_WINDOW = 50   # Show last N episodes as scrolling sparkline columns
 
 # Sparkline group colors (BGR for cv2) — matches the Cold Cyberpunk palette
 _SPARK_COLORS = [
-    (255, 210, 180),   # Force  — Ice Blue (BGR)
-    (240, 255, 0),     # Torque — Neon Cyan (BGR)
-    (220, 80, 220),    # Position — Magenta (BGR)
-    (90, 185, 220),    # Goal   — Muted Amber (BGR)
+    (180, 140, 100),   # Force  — Steel Blue (BGR)
+    (160, 150, 40),    # Torque — Medical Teal (BGR)
+    (150, 150, 150),   # Position — Slate Gray (BGR)
+    (80,  150, 220),   # Goal   — Soft Amber (BGR)
 ]
 _SPARK_LABELS = ['F', 'T', 'P', 'G']
 
