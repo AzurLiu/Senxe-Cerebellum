@@ -25,11 +25,12 @@ env/
 .LSOverride
 
 # ═══ Simulation Output (raw artifacts) ═══
-# Exclude all generated videos and images by default.
+# Exclude all generated videos, images, and data sheets by default.
 # README assets are committed from the assets/ directory.
 *.mp4
 *.avi
 *.png
+*.csv
 
 # ═══ Preserve README Assets ═══
 !assets/*.gif

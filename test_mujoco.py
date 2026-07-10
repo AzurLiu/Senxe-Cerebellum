@@ -7,6 +7,7 @@ installation.
 
 Usage: python test_mujoco.py
 """
+import numpy as np
 import robosuite as suite
 
 # Create environment (has_renderer=True opens a 3D visualization window)
@@ -19,8 +20,6 @@ print("RoboSuite test started — PegInHole window should be visible, running ra
 
 # Run 500 random action steps
 for step in range(500):
-    action = env.action_spec[0].shape[0] * [0.0]  # Zero action placeholder
-    import numpy as np
     action = np.random.uniform(-1, 1, env.action_spec[0].shape[0])
     obs, reward, done, info = env.step(action)
     env.render()

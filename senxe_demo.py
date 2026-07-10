@@ -63,13 +63,14 @@ class VIE:
 
     def encode(self, obs, goal):
         if isinstance(obs, dict):
-            grip_pos = obs.get("observation", np.zeros(25))[:3]
-            grip_vel = obs.get("observation", np.zeros(25))[3:6] if len(obs.get("observation", np.zeros(25))) >= 6 else np.zeros(3)
-            object_pos = obs.get("object", np.zeros(3))[:3]
+            raw_obs = obs.get("observation", np.zeros(25))
+            grip_pos = raw_obs[:3]
+            grip_vel = raw_obs[20:23] if len(raw_obs) >= 23 else (raw_obs[3:6] if len(raw_obs) >= 6 else np.zeros(3))
+            object_pos = obs.get("achieved_goal", obs.get("object", raw_obs[3:6] if len(raw_obs) >= 6 else grip_pos.copy()))[:3]
         else:
             grip_pos = obs[:3]
-            grip_vel = obs[3:6] if len(obs) >= 6 else np.zeros(3)
-            object_pos = obs[3:6] if len(obs) >= 15 else grip_pos.copy()
+            grip_vel = obs[20:23] if len(obs) >= 23 else np.zeros(3)
+            object_pos = obs[3:6] if len(obs) >= 6 else grip_pos.copy()
 
         delta     = goal - grip_pos
         distance  = np.linalg.norm(delta)
@@ -274,7 +275,10 @@ class CL1Agent:
         self.neurons.stim(ChannelSet(*self.top_channels), stim, burst)
 
     def run_episode(self, max_steps=MAX_STEPS, record=False, ep_num=0):
-        obs_dict, _ = self.env.reset()
+        # Seed both numpy/random and Gym environment to guarantee exact paired layouts
+        seed = 42 + ep_num
+        np.random.seed(seed)
+        obs_dict, _ = self.env.reset(seed=seed)
         obs  = obs_dict["observation"]
         goal = obs_dict["desired_goal"]
 
@@ -290,7 +294,7 @@ class CL1Agent:
         for step in range(max_steps):
             self.vie.encode(obs, goal)
             spikes, cur_firing_rates = self._detect_spikes()
-            vel = obs[3:6] if len(obs) >= 6 else np.zeros(3)
+            vel = obs[20:23] if len(obs) >= 23 else np.zeros(3)
             self.pdi.update(vel)
             pdi_val = self.pdi.compute()
             fep_boost = pdi_val * 0.4
@@ -333,6 +337,8 @@ class CL1Agent:
         if total_reward > self.best_reward:
             self.best_reward = total_reward
             self.best_bias   = self.action_bias.copy()
+        else:
+            self.action_bias = self.best_bias.copy()
 
         success_rate = np.mean(episode_successes) * 100 if episode_successes else 0.0
         return total_reward, self.pdi.compute(), frames, success_rate

@@ -50,28 +50,65 @@ def make_robosuite_env(render=False):
     return GymWrapper(raw), raw
 
 def extract_obs(obs, raw_env=None):
-    if raw_env is not None:
-        try:
-            eef = raw_env.sim.data.get_site_xpos("gripper0_right_grip_site")
-            vel = raw_env.sim.data.get_site_xvelp("gripper0_right_grip_site")
-            peg = raw_env.sim.data.body("peg1").xpos if hasattr(raw_env.sim.data, "body") else raw_env.sim.data.get_body_xpos("peg1")
-            p2h = peg - eef
-            frc_raw = getattr(raw_env.robots[0], "ee_force", np.zeros(3))
-            trq_raw = getattr(raw_env.robots[0], "ee_torque", np.zeros(3))
-            frc = frc_raw["right"] if isinstance(frc_raw, dict) and "right" in frc_raw else frc_raw
-            trq = trq_raw["right"] if isinstance(trq_raw, dict) and "right" in trq_raw else trq_raw
-            frc = np.array(frc).flatten()[:3]
-            trq = np.array(trq).flatten()[:3]
-            p2h = np.array(p2h).flatten()[:3]
-            eef = np.array(eef).flatten()[:3]
-            vel = np.array(vel).flatten()[:3]
-            jnt = raw_env.robots[0]._joint_positions
-            nut = raw_env.sim.data.body("SquareNut_main").xpos if hasattr(raw_env.sim.data, "body") else raw_env.sim.data.get_body_xpos("SquareNut_main")
-            e2n = nut - eef
-            return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt, eef_to_nut=e2n)
-        except Exception:
-            pass
-    raise RuntimeError("extract_obs requires raw_env")
+    if raw_env is None:
+        raise RuntimeError("extract_obs requires raw_env")
+    try:
+        sim_data = raw_env.sim.data
+        
+        # EEF position and velocity (try different version-robust naming schemes)
+        eef_site_names = ["gripper0_right_grip_site", "gripper0_grip_site", "right_grip_site"]
+        eef, vel = None, None
+        for name in eef_site_names:
+            try:
+                eef = sim_data.get_site_xpos(name)
+                vel = sim_data.get_site_xvelp(name)
+                break
+            except Exception:
+                continue
+        if eef is None or vel is None:
+            raise RuntimeError(f"Could not find end-effector grip site in Mujoco simulation (tried: {eef_site_names})")
+
+        # Peg position (try different names)
+        peg_body_names = ["peg1", "peg"]
+        peg = None
+        for name in peg_body_names:
+            try:
+                peg = sim_data.body(name).xpos if hasattr(sim_data, "body") else sim_data.get_body_xpos(name)
+                break
+            except Exception:
+                continue
+        if peg is None:
+            raise RuntimeError(f"Could not find peg body in Mujoco simulation (tried: {peg_body_names})")
+
+        p2h = peg - eef
+        
+        frc_raw = getattr(raw_env.robots[0], "ee_force", np.zeros(3))
+        trq_raw = getattr(raw_env.robots[0], "ee_torque", np.zeros(3))
+        frc = frc_raw["right"] if isinstance(frc_raw, dict) and "right" in frc_raw else frc_raw
+        trq = trq_raw["right"] if isinstance(trq_raw, dict) and "right" in trq_raw else trq_raw
+        frc = np.array(frc).flatten()[:3]
+        trq = np.array(trq).flatten()[:3]
+        p2h = np.array(p2h).flatten()[:3]
+        eef = np.array(eef).flatten()[:3]
+        vel = np.array(vel).flatten()[:3]
+        jnt = raw_env.robots[0]._joint_positions
+
+        # Nut position (try different names)
+        nut_body_names = ["SquareNut_main", "nut"]
+        nut = None
+        for name in nut_body_names:
+            try:
+                nut = sim_data.body(name).xpos if hasattr(sim_data, "body") else sim_data.get_body_xpos(name)
+                break
+            except Exception:
+                continue
+        if nut is None:
+            raise RuntimeError(f"Could not find nut body in Mujoco simulation (tried: {nut_body_names})")
+
+        e2n = nut - eef
+        return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt, eef_to_nut=e2n)
+    except Exception as e:
+        raise RuntimeError(f"Failed to extract observation from raw_env: {e}") from e
 
 def compute_insertion_depth(info):
     d = np.linalg.norm(info["peg_to_hole"])
@@ -136,7 +173,10 @@ class CL1Agent:
         self.neurons.stim(ChannelSet(*random_chs), stim, burst)
 
     def run_episode(self, max_steps=MAX_STEPS, record=False, ep_num=0):
-        obs, _ = self.env.reset()
+        # Seed both numpy/random and Gym environment to guarantee exact paired layouts
+        seed = 42 + ep_num
+        np.random.seed(seed)
+        obs, _ = self.env.reset(seed=seed)
         obs_info = extract_obs(obs, raw_env=self.raw_env)
         self.vie.reset(); self.pdi.reset(); self.decoder.reset(); self.curiosity.reset()
         total_reward = 0.0; frames_list = []
@@ -164,7 +204,15 @@ class CL1Agent:
             depth, cur_dist = compute_insertion_depth(obs_info)
             inserted = depth > INSERTION_DEPTH_THRESHOLD
             force_safe = force_mag < FORCE_SAFETY_THRESHOLD
-            success = 1 if (inserted and force_safe) else 0
+            
+            # Use official env success checking if available
+            if hasattr(self.raw_env, "_check_success") and self.raw_env._check_success():
+                success = 1
+            elif isinstance(info, dict) and info.get("success", False):
+                success = 1
+            else:
+                success = 1 if (inserted and force_safe) else 0
+
             ep_successes.append(success)
             ep_force_safe.append(1 if force_safe else 0)
             step_rewards.append(reward)

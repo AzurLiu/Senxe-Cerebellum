@@ -96,14 +96,14 @@ def warmup_calibration(
     stim_responses = np.zeros(64)
     rounds_per_ch = max(1, stim_rounds // 64)
 
-    # Sequentially stimulate channels to measure network excitability without causing a culture seizure
+    # Sequentially stimulate channels and measure the response of each stimulated channel specifically
     for ch in range(64):
         neurons.stim(ChannelSet(ch), stim, burst)
+        ch_resp = 0.0
         for _ in range(rounds_per_ch):
             frames = neurons.read(100, None)
-            stim_responses += np.mean(np.abs(frames.astype(float)), axis=0)
-            
-    stim_responses /= max(1, 64 * rounds_per_ch)
+            ch_resp += np.mean(np.abs(frames[:, ch].astype(float)))
+        stim_responses[ch] = ch_resp / max(1, rounds_per_ch)
 
     responsiveness = stim_responses - baseline_responses
     channel_ranking = np.argsort(responsiveness)[::-1]

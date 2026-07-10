@@ -41,10 +41,29 @@ _FORCE_EMA_ALPHA = 0.18                     # EMA coefficient: lower = smoother 
 _GROUP_COLORS = {
     'force':    {'echo': (255, 255, 255), 'active': (180, 210, 255), 'inactive': (20, 30, 50)},
     'torque':   {'echo': (255, 255, 255), 'active': (0,   255, 240), 'inactive': (5,  40, 38)},
-    'position': {'echo': (255, 255, 255), 'active': (220, 80,  220), 'inactive': (38, 12, 38)},
-    'goal':     {'echo': (255, 255, 255), 'active': (220, 185, 90),  'inactive': (40, 32, 12)},
+    'velocity': {'echo': (255, 255, 255), 'active': (140, 180, 220), 'inactive': (15, 22, 30)},
+    'spatial':  {'echo': (255, 255, 255), 'active': (220, 80,  220), 'inactive': (38, 12, 38)},
+    'state':    {'echo': (255, 255, 255), 'active': (220, 185, 90),  'inactive': (40, 32, 12)},
+    'reserved': {'echo': (255, 255, 255), 'active': (120, 120, 120), 'inactive': (15, 15, 15)},
 }
-_CH_GROUP_MAP = ['force'] * 16 + ['torque'] * 16 + ['position'] * 16 + ['goal'] * 16
+
+# Align channel mapping with VIE (permuted channels)
+_prng = np.random.RandomState(42)
+_all_channels = _prng.permutation(64).tolist()
+
+_CH_GROUP_MAP = [None] * 64
+for ch in _all_channels[0:12]:
+    _CH_GROUP_MAP[ch] = 'force'
+for ch in _all_channels[12:24]:
+    _CH_GROUP_MAP[ch] = 'torque'
+for ch in _all_channels[24:28]:
+    _CH_GROUP_MAP[ch] = 'velocity'
+for ch in _all_channels[28:55]:
+    _CH_GROUP_MAP[ch] = 'spatial'
+for ch in _all_channels[55:60]:
+    _CH_GROUP_MAP[ch] = 'state'
+for ch in _all_channels[60:64]:
+    _CH_GROUP_MAP[ch] = 'reserved'
 
 # Bloom kernel size (must be odd). Larger = softer glow, more GPU-like feel.
 _BLOOM_KSIZE = 31
@@ -359,15 +378,17 @@ _EVOLUTION_WINDOW = 50   # Show last N episodes as scrolling sparkline columns
 _SPARK_COLORS = [
     (255, 210, 180),   # Force  — Ice Blue (BGR)
     (240, 255, 0),     # Torque — Neon Cyan (BGR)
-    (220, 80, 220),    # Position — Magenta (BGR)
-    (90, 185, 220),    # Goal   — Muted Amber (BGR)
+    (220, 180, 140),   # Velocity — Light Ice Blue (BGR)
+    (220, 80, 220),    # Spatial — Magenta (BGR)
+    (90, 185, 220),    # State   — Muted Amber (BGR)
+    (120, 120, 120),   # Reserved — Grey (BGR)
 ]
-_SPARK_LABELS = ['F', 'T', 'P', 'G']
+_SPARK_LABELS = ['F', 'T', 'V', 'S', 'D', 'R']
 
 
 def _overlay_evolution_heatmap(frame, glow_layer):
     """Channel Evolution — Pure cv2 scrolling dot-matrix sparkline.
-    4 rows (Force/Torque/Position/Goal), each a horizontal sparkline
+    6 rows (Force/Torque/Velocity/Spatial/State/Reserved), each a horizontal sparkline
     of per-episode average firing rate. Cached per-episode for speed."""
     h, w = frame.shape[:2]
     n_eps = len(hud.episode_firing_history)
@@ -392,23 +413,34 @@ def _overlay_evolution_heatmap(frame, glow_layer):
         window = min(n_eps, _EVOLUTION_WINDOW)
         recent = np.array(hud.episode_firing_history[-window:])  # (window, 64)
 
-        # Group into 4 channel banks: mean firing rate per bank per episode
-        # Force(0-15), Torque(16-31), Position(32-47), Goal(48-63)
-        grouped = np.zeros((4, window), dtype=np.float32)
-        for gi, (lo, hi) in enumerate([(0, 16), (16, 32), (32, 48), (48, 64)]):
-            grouped[gi] = recent[:, lo:hi].mean(axis=1)
+        # Group into 6 channel banks matching VIE permutation
+        grouped = np.zeros((6, window), dtype=np.float32)
+        
+        force_chs = _all_channels[0:12]
+        torque_chs = _all_channels[12:24]
+        velocity_chs = _all_channels[24:28]
+        spatial_chs = _all_channels[28:55]
+        state_chs = _all_channels[55:60]
+        reserved_chs = _all_channels[60:64]
+
+        grouped[0] = recent[:, force_chs].mean(axis=1)
+        grouped[1] = recent[:, torque_chs].mean(axis=1)
+        grouped[2] = recent[:, velocity_chs].mean(axis=1)
+        grouped[3] = recent[:, spatial_chs].mean(axis=1)
+        grouped[4] = recent[:, state_chs].mean(axis=1)
+        grouped[5] = recent[:, reserved_chs].mean(axis=1)
 
         # Per-row normalize to [0, 1] for sparkline height
-        for gi in range(4):
+        for gi in range(6):
             mn, mx = grouped[gi].min(), grouped[gi].max()
             rng = mx - mn if (mx - mn) > 0.5 else 0.5
             grouped[gi] = (grouped[gi] - mn) / rng
 
         # Render onto a small black canvas
         canvas = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
-        row_h = panel_h // 4  # 25px per sparkline row
+        row_h = panel_h // 6  # 16px per sparkline row
 
-        for gi in range(4):
+        for gi in range(6):
             base_y = gi * row_h
             color = _SPARK_COLORS[gi]
             vals = grouped[gi]
@@ -445,7 +477,7 @@ def _overlay_evolution_heatmap(frame, glow_layer):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.30, color, 1, cv2.LINE_AA)
 
             # Subtle separator line
-            if gi < 3:
+            if gi < 5:
                 sep_y = base_y + row_h
                 cv2.line(canvas, (18, sep_y), (panel_w - 4, sep_y),
                          (30, 35, 40), 1, cv2.LINE_AA)

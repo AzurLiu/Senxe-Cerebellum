@@ -207,3 +207,32 @@ class TestNeuralCuriosity:
         assert len(nc.memory) == 2
         nc.reset()
         assert len(nc.memory) == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+#  HUD & VIE Channel Map Alignment Tests
+# ═══════════════════════════════════════════════════════════════
+
+def test_hud_vie_mapping_alignment():
+    """Verify that HUD's channel categories align perfectly with VIE's channel layout."""
+    from core.hud import _CH_GROUP_MAP as hud_map
+    from core.vie import VIE
+    
+    # Reconstruct VIE expected group names per channel
+    vie_map = [None] * 64
+    for ch in VIE.CH_FORCE:
+        vie_map[ch] = 'force'
+    for ch in VIE.CH_TORQUE:
+        vie_map[ch] = 'torque'
+    for ch in VIE.CH_VELOCITY:
+        vie_map[ch] = 'velocity'
+    for ch in VIE.CH_SPATIAL:
+        vie_map[ch] = 'spatial'
+    for ch in VIE.CH_STATE:
+        vie_map[ch] = 'state'
+    for ch in VIE.CH_RESERVED:
+        vie_map[ch] = 'reserved'
+        
+    for ch in range(64):
+        assert hud_map[ch] == vie_map[ch], f"Mismatch at channel {ch}: HUD has {hud_map[ch]}, VIE has {vie_map[ch]}"
+
