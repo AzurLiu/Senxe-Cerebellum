@@ -203,14 +203,14 @@ class CL1Agent:
             # Positive: reward > 0 → structured burst on top-K channels
             self._predictable_stim_inject(reward)
             # Negative: force exceeds safety OR distance increasing → random noise
-            unpredictable stimulus = 0.0
+            penalty = 0.0
             if force_mag > FORCE_SAFETY_THRESHOLD:
-                unpredictable stimulus -= (force_mag - FORCE_SAFETY_THRESHOLD) * 0.5
+                penalty -= (force_mag - FORCE_SAFETY_THRESHOLD) * 0.5
             if prev_dist is not None and cur_dist > prev_dist + 0.005:
-                unpredictable stimulus -= (cur_dist - prev_dist) * 10.0
+                penalty -= (cur_dist - prev_dist) * 10.0
             if reward < -1.0:
-                unpredictable stimulus += reward * 0.3  # already negative
-            self._unpredictable_stim_inject(unpredictable stimulus)
+                penalty += reward * 0.3  # already negative
+            self._unpredictable_stim_inject(penalty)
             prev_dist = cur_dist
 
             if record:
