@@ -94,17 +94,23 @@ class VIE:
 
         Args:
             obs_info: Dictionary with keys 'eef_pos', 'eef_vel', 'force',
-                      'torque', 'peg_to_hole' from extract_obs().
+                      'torque', 'peg_to_hole', 'eef_to_nut' from extract_obs().
         """
         eef_pos = obs_info["eef_pos"]; eef_vel = obs_info["eef_vel"]
         force = obs_info["force"]; torque = obs_info["torque"]
         peg_to_hole = obs_info["peg_to_hole"]
-        distance = np.linalg.norm(peg_to_hole)
-        direction = peg_to_hole / (distance + 1e-8)
+        force_mag = np.linalg.norm(force)
+        torque_mag = np.linalg.norm(torque)
+        dist = np.linalg.norm(peg_to_hole)
+        vel_mag = np.linalg.norm(eef_vel)
+        
+        eef_to_nut = obs_info.get("eef_to_nut", np.zeros(3))
+        nut_dist = np.linalg.norm(eef_to_nut)
+
+        direction = peg_to_hole / (dist + 1e-8)
         stim = StimDesign(160, -1.0, 160, 1.0)
 
         # ══ Force Magnitude — Rate Coding (CH 0-5) ══
-        force_mag = np.linalg.norm(force)
         fnorm = np.clip(force_mag / self.force_threshold, 0.0, 1.5)
         fhz = int(np.clip(50 + 350 * fnorm, 50, 400))
         fn = max(1, min(10, int(fnorm * 8 * self.channel_gain[self.CH_FORCE_MAG[0]])))
@@ -134,8 +140,7 @@ class VIE:
                 self.neurons.stim(ChannelSet(ch_idx), wave_stim, BurstDesign(1, wave_freq))
 
         # ══ Torque/Friction — Traveling Waves (CH 16-27) ══
-        tmag = np.linalg.norm(torque)
-        if tmag > 0.01:
+        if torque_mag > 0.01:
             for ax in range(3):
                 t = torque[ax]
                 if abs(t) > 0.01:
@@ -186,6 +191,14 @@ class VIE:
         dhz = int(np.clip((50 + 300 * dn) * dg, 50, 400)); dnn = max(1, int(dn * 6 * dg))
         dstim = StimDesign(160, -0.8, 160, 0.8)
         self.neurons.stim(ChannelSet(*self.CH_DEPTH), dstim, BurstDesign(dnn, dhz))
+
+        # ══ Nut Distance (CH 60-63) - Crucial for NutAssembly Task ══
+        # Encodes proximity to the nut so the agent can find it
+        nd_norm = np.clip(1.0 / (nut_dist + 0.05), 0.0, 20.0)
+        nd_hz = int(np.clip(50 + 15 * nd_norm, 50, 350))
+        nd_inten = np.clip(nd_norm * 0.1, 0.1, 1.5)
+        nd_stim = StimDesign(160, -nd_inten, 160, nd_inten)
+        self.neurons.stim(ChannelSet(*self.CH_RESERVED), nd_stim, BurstDesign(2, nd_hz))
 
     def adapt(self, firing_rates):
         """Online adaptation of channel encoding gains.

@@ -83,7 +83,9 @@ def extract_obs(obs, raw_env=None):
             eef = np.array(eef).flatten()[:3]
             vel = np.array(vel).flatten()[:3]
             jnt = raw_env.robots[0]._joint_positions
-            return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt)
+            nut = raw_env.sim.data.body("SquareNut_main").xpos if hasattr(raw_env.sim.data, "body") else raw_env.sim.data.get_body_xpos("SquareNut_main")
+            e2n = nut - eef
+            return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt, eef_to_nut=e2n)
         except Exception:
             pass
 
@@ -94,7 +96,9 @@ def extract_obs(obs, raw_env=None):
         trq = np.array(obs.get("robot0_eef_torque", obs.get("ft_torque", obs.get("robot0_torque", np.zeros(3)))), dtype=np.float64).flatten()[:3]
         p2h = np.array(obs.get("peg_to_hole", obs.get("hole_pos", np.zeros(3)) - eef), dtype=np.float64).flatten()[:3]
         jnt = np.array(obs.get("robot0_joint_pos", np.zeros(7)), dtype=np.float64).flatten()
-        return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt)
+        nut = np.array(obs.get("SquareNut_pos", np.zeros(3)), dtype=np.float64).flatten()[:3]
+        e2n = nut - eef
+        return dict(eef_pos=eef, eef_vel=vel, force=frc, torque=trq, peg_to_hole=p2h, joint_pos=jnt, eef_to_nut=e2n)
     
     o = np.array(obs, dtype=np.float64).flatten(); n = len(o)
     return dict(
@@ -104,6 +108,7 @@ def extract_obs(obs, raw_env=None):
         torque=np.zeros(3),
         peg_to_hole=np.zeros(3),
         joint_pos=np.zeros(7),
+        eef_to_nut=np.zeros(3),
     )
 
 def compute_insertion_depth(info):
