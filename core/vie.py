@@ -1,5 +1,5 @@
 """
-Project Senxe — Virtual Interference Encoding (VIE)
+Senxe Cerebellum — Virtual Interference Encoding (VIE)
 ====================================================
 Maps physical sensor data (force, torque, position, goal) to neural
 stimulation patterns on a 64-channel MEA using biologically realistic

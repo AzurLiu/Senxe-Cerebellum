@@ -1,5 +1,5 @@
 """
-Project Senxe — Video Utilities
+Senxe Cerebellum — Video Utilities
 ================================
 Shared video saving and side-by-side comparison generation.
 

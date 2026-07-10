@@ -1,5 +1,5 @@
 """
-Project Senxe — HUD Overlay System
+Senxe Cerebellum — HUD Overlay System
 ==================================
 v5.0 Cold Cyberpunk HUD — Bloom + EMA + Breathing + Zero Matplotlib
 

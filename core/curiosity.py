@@ -1,5 +1,5 @@
 """
-Project Senxe — Neural Intrinsic Curiosity
+Senxe Cerebellum — Neural Intrinsic Curiosity
 ============================================
 Firing-pattern novelty detection for exploration drive.
 

@@ -1,5 +1,5 @@
 """
-Project Senxe — Core Modules
+Senxe Cerebellum — Core Modules
 =============================
 Shared biological neural interface components for v3.0 and v4.0 demos.
 

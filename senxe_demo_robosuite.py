@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Project Senxe v4.0 — RoboSuite NutAssembly (Native Force/Torque Sensors)
+Senxe Cerebellum v4.0 — RoboSuite NutAssembly (Native Force/Torque Sensors)
 =========================================================================
 CL1 Bio-Computer vs PPO vs Random — Industrial Assembly Sample Efficiency
 
@@ -421,7 +421,7 @@ def plot_learning_curves(cl1_r, ppo_r, rnd_r, path=PLOT_FILE,
     ax.plot(range(off, off+len(rnd_s)), rnd_s, color='#95a5a6', lw=2.0, ls='--',
             label='Random (baseline)')
 
-    ax.set_title("Project Senxe v4.0 — RoboSuite NutAssembly (Native Force/Torque)\n"
+    ax.set_title("Senxe Cerebellum v4.0 — RoboSuite NutAssembly (Native Force/Torque)\n"
                  "CL1 Bio vs PPO vs Random: Industrial Assembly Sample Efficiency",
                  fontsize=13, fontweight='bold', pad=15)
     ax.set_xlabel("Episode"); ax.set_ylabel("Reward")
@@ -429,7 +429,7 @@ def plot_learning_curves(cl1_r, ppo_r, rnd_r, path=PLOT_FILE,
     ax.set_xlim(0, max(len(cl1_r), len(ppo_r), len(rnd_r)))
 
     ax.text(0.02, 0.95,
-            f"Senxe v4.0 — Native Force/Torque Sensors\n"
+            f"Senxe Cerebellum v4.0 — Native Force/Torque Sensors\n"
             f"CL1: {CL1_EPISODES} eps | PPO: {PPO_TIMESTEPS} steps\n"
             f"Random: {RANDOM_EPISODES} eps\n"
             f"NutAssembly ({ROBOT}) — ready for real robotic arm\n"
@@ -464,7 +464,7 @@ def main():
     np.random.seed(SEED)
     hud.reset()
     print("+" + "=" * 58 + "+")
-    print("|  Project Senxe v4.0 — RoboSuite NutAssembly            |")
+    print("|  Senxe Cerebellum v4.0 — RoboSuite NutAssembly            |")
     print("|  Native Force/Torque — Ready for Real Robotic Arm       |")
     print("+" + "=" * 58 + "+\n")
 
@@ -511,7 +511,7 @@ def main():
 
     # Done
     print("\n" + "=" * 60)
-    print("  Project Senxe v4.0 Demo Complete!")
+    print("  Senxe Cerebellum v4.0 Demo Complete!")
     print("=" * 60)
     print(f"  Video (CL1):          {VIDEO_CL1}")
     print(f"  Video (side-by-side): {VIDEO_SIDE}")

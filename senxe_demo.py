@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Project Senxe v3.0 — FetchPickAndPlace Benchmark (Legacy)
+Senxe Cerebellum v3.0 — FetchPickAndPlace Benchmark (Legacy)
 ==========================================================
 CL1 Bio-Computer vs PPO vs Random — Pick-and-Place Sample Efficiency Benchmark
 
@@ -43,7 +43,7 @@ from core.pdi import PDI
 from core.video import save_video, make_side_by_side
 
 # ═══ Configuration ═══
-# Senxe v3.0 — FetchPickAndPlace + Doom-style Visual Object Encoding
+# Senxe Cerebellum v3.0 — FetchPickAndPlace + Doom-style Visual Object Encoding
 
 ENV_NAME          = "FetchPickAndPlace-v4"   # Gymnasium Robotics pick-and-place
 REWARD_TYPE       = "dense"                  # "dense" or "sparse"
@@ -734,7 +734,7 @@ def plot_learning_curves(cl1_rewards, ppo_rewards, random_rewards, path=PLOT_FIL
             label='Random Agent (baseline)')
 
     ax.set_title(
-        "Project Senxe v3.0 — Ready for Real CL1\n"
+        "Senxe Cerebellum v3.0 — Ready for Real CL1\n"
         "CL1 Bio-Computer vs PPO vs Random: PickAndPlace Sample Efficiency",
         fontsize=13, fontweight='bold', pad=15
     )
@@ -758,7 +758,7 @@ def plot_learning_curves(cl1_rewards, ppo_rewards, random_rewards, path=PLOT_FIL
 
     # Annotation box with experiment details
     ax.text(0.02, 0.95,
-            f"Senxe v3.0 — Doom-style visual + pick-and-place task\n"
+            f"Senxe Cerebellum v3.0 — Doom-style visual + pick-and-place task\n"
             f"CL1: {CL1_EPISODES} eps (online, bio-inspired)\n"
             f"PPO: {PPO_TIMESTEPS} pre-train -> {PPO_EVAL_EPS} eval\n"
             f"Random: {RANDOM_EPISODES} eps (pure random)\n"
@@ -777,7 +777,7 @@ def plot_learning_curves(cl1_rewards, ppo_rewards, random_rewards, path=PLOT_FIL
 
 def main():
     print("+" + "=" * 58 + "+")
-    print("|  Project Senxe v3.0 -- Ready for Real CL1               |")
+    print("|  Senxe Cerebellum v3.0 -- Ready for Real CL1               |")
     print("|  CL1 Bio-Computer x PickAndPlace Control                 |")
     print("+" + "=" * 58 + "+\n")
 
@@ -833,7 +833,7 @@ def main():
 
     # Done
     print("\n" + "=" * 60)
-    print("  Project Senxe v3.0 Demo Complete!")
+    print("  Senxe Cerebellum v3.0 Demo Complete!")
     print("=" * 60)
     print(f"  Video (CL1):       {VIDEO_CL1}")
     print(f"  Video (side-by-side): {VIDEO_SIDE}")

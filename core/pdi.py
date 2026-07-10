@@ -1,5 +1,5 @@
 """
-Project Senxe — Physical Disturbance Index (PDI)
+Senxe Cerebellum — Physical Disturbance Index (PDI)
 =================================================
 FEP-inspired explore/exploit gate based on kinematic stability.
 

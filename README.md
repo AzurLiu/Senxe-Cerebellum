@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">Project Senxe v4.0</h1>
+  <h1 align="center">Senxe Cerebellum v4.0</h1>
   <p align="center">
     <strong>Biologically-Grounded Motor Control for Industrial Robotics</strong><br>
     Interfacing Cortical Labs CL1 Biological Neurons with Robotic Arms
@@ -18,7 +18,7 @@
 
 > *"What if we stopped training artificial networks to mimic biology — and just used the biology itself?"*
 
-**Project Senxe** is a biologically-grounded control framework that interfaces **Cortical Labs CL1** biological neurons with robotic arms (Franka Panda), benchmarked against PPO and random baselines. v4.0 targets **RoboSuite NutAssembly** with native force/torque sensors — bridging the gap from simulation to real-world industrial assembly.
+**Senxe Cerebellum** is a biologically-grounded control framework that interfaces **Cortical Labs CL1** biological neurons with robotic arms (Franka Panda), benchmarked against PPO and random baselines. v4.0 targets **RoboSuite NutAssembly** with native force/torque sensors — bridging the gap from simulation to real-world industrial assembly.
 
 <p align="center">
   <img src="assets/side_by_side_nutassembly.gif" alt="CL1 Bio-Computer vs PPO — NutAssembly Side-by-Side" width="720">
@@ -32,7 +32,7 @@
 
 ### 1. Free Energy Principle (FEP) as Control Law
 
-Senxe treats the Free Energy Principle not as a theoretical curiosity but as an **actionable control law**. The Physical Disturbance Index (PDI) — computed from velocity and acceleration variance — directly modulates the explore/exploit balance:
+Cerebellum treats the Free Energy Principle not as a theoretical curiosity but as an **actionable control law**. The Physical Disturbance Index (PDI) — computed from velocity and acceleration variance — directly modulates the explore/exploit balance:
 
 - **High PDI** → Unstable state → Increase exploration noise (surprise minimization)
 - **Low PDI** → Stable state → Exploit current policy (precision control)
@@ -74,8 +74,8 @@ The differential signal is smoothed via EMA (exponential moving average) to prod
 
 ```bash
 # Clone and install
-git clone https://github.com/your-username/project-senxe.git
-cd project-senxe
+git clone https://github.com/your-username/senxe-cerebellum.git
+cd senxe-cerebellum
 pip install -r requirements.txt
 
 # Set MuJoCo renderer (macOS)
@@ -147,7 +147,7 @@ FORCE_SAFETY_THRESHOLD    = 20.0   # Newtons
 ### Project Structure
 
 ```
-project-senxe/
+senxe-cerebellum/
 ├── senxe_demo_robosuite.py    # v4.0 Main: RoboSuite NutAssembly (native F/T sensors)
 ├── senxe_demo.py              # v3.0 Legacy: FetchPickAndPlace (visual encoding)
 ├── core/
@@ -235,7 +235,7 @@ pytest tests/test_core.py -v
 
 **Azur (Jiahao)** — 18-year-old independent developer, incoming University of Alberta student.
 
-Built from scratch as an exploration into biological computation and neural motor control for industrial robotics. This project represents a first-principles approach to neuromorphic engineering: rather than training artificial networks to approximate biological dynamics, Senxe interfaces directly with biological neural tissue to solve real-world motor control problems.
+Built from scratch as an exploration into biological computation and neural motor control for industrial robotics. This project represents a first-principles approach to neuromorphic engineering: rather than training artificial networks to approximate biological dynamics, Cerebellum interfaces directly with biological neural tissue to solve real-world motor control problems.
 
 ---
 

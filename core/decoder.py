@@ -1,9 +1,9 @@
 """
-Project Senxe — Antagonistic Decoding Module
+Senxe Cerebellum — Antagonistic Decoding Module
 =============================================
 Biological flexor/extensor antagonistic motor control decoder.
 
-This module implements the core motor output pathway of the Senxe framework.
+This module implements the core motor output pathway of the Senxe Cerebellum framework.
 Inspired by the antagonistic muscle pairs in vertebrate motor systems
 (e.g., biceps/triceps), it converts raw neural spike channels into smooth,
 continuous action vectors suitable for robotic control.

@@ -1,5 +1,5 @@
 """
-Project Senxe — Neural Interface Module
+Senxe Cerebellum — Neural Interface Module
 ========================================
 CL1 biological neural interface: built-in simulator + real CL1 auto-detection.
 
