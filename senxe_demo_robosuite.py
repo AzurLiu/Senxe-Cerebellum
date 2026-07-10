@@ -116,7 +116,7 @@ class CL1Agent:
         firing_rates = np.mean(np.abs(frames.astype(np.float32)), axis=0)
         return spike_channels, firing_rates
 
-    def _dopamine_inject(self, reward):
+    def _predictable_stim_inject(self, reward):
         """Dopamine-like reward injection — positive reinforcement pathway.
 
         When reward > 0, delivers structured burst stimulation to the top-K
@@ -135,7 +135,7 @@ class CL1Agent:
         self.neurons.stim(ChannelSet(*self.top_channels), s,
                           BurstDesign(DOPAMINE_BURST_N, DOPAMINE_BURST_HZ))
 
-    def _punishment_inject(self, penalty):
+    def _unpredictable_stim_inject(self, penalty):
         """Punishment noise injection — negative reinforcement pathway.
 
         When a negative event occurs (force violation, increasing distance,
@@ -201,7 +201,7 @@ class CL1Agent:
 
             # === Dual feedback: Dopamine (positive) + Punishment (negative) ===
             # Positive: reward > 0 → structured burst on top-K channels
-            self._dopamine_inject(reward)
+            self._predictable_stim_inject(reward)
             # Negative: force exceeds safety OR distance increasing → random noise
             punishment = 0.0
             if force_mag > FORCE_SAFETY_THRESHOLD:
@@ -210,7 +210,7 @@ class CL1Agent:
                 punishment -= (cur_dist - prev_dist) * 10.0
             if reward < -1.0:
                 punishment += reward * 0.3  # already negative
-            self._punishment_inject(punishment)
+            self._unpredictable_stim_inject(punishment)
             prev_dist = cur_dist
 
             if record:

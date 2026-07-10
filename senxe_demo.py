@@ -405,7 +405,7 @@ class CL1Agent:
         self.best_reward = -np.inf
         self.best_bias   = np.zeros(self.action_dim)
 
-        # Channel calibration results — used for dopamine injection targeting
+        # Channel calibration results — used for predictable stimulus injection targeting
         if channel_ranking is not None:
             self.top_channels = channel_ranking[:DOPAMINE_TOP_K].tolist()
         else:
@@ -429,7 +429,7 @@ class CL1Agent:
         firing_rates = np.mean(np.abs(frames.astype(np.float32)), axis=0)
         return spike_channels, firing_rates
 
-    def _dopamine_inject(self, reward):
+    def _predictable_stim_inject(self, reward):
         """Dopamine-like reward injection — positive reinforcement pathway.
 
         When reward > 0, delivers structured burst stimulation to the top-K
@@ -443,7 +443,7 @@ class CL1Agent:
             return
         # Stronger reward → stronger stimulation intensity
         amp = np.clip(reward * 2.0, 0.5, 3.0)
-        stim = StimDesign(200, -amp, 200, amp)  # Wider pulse for dopamine burst
+        stim = StimDesign(200, -amp, 200, amp)  # Wider pulse for predictable stimulus burst
         burst = BurstDesign(DOPAMINE_BURST_N, DOPAMINE_BURST_HZ)
         self.neurons.stim(ChannelSet(*self.top_channels), stim, burst)
 
@@ -504,7 +504,7 @@ class CL1Agent:
             step_rewards.append(reward)
 
             # 7. Dopamine-like reward injection (reward > 0 → reinforce active pathway)
-            self._dopamine_inject(reward)
+            self._predictable_stim_inject(reward)
 
             # 8. Record video frame with HUD overlay
             if record:
@@ -527,7 +527,7 @@ class CL1Agent:
                     )
                     frames.append(frame)
 
-            # 9. Reward-modulated learning (Hebbian + dopamine synergy)
+            # 9. Reward-modulated learning (Hebbian + predictable stimulus synergy)
             if reward > -0.5:
                 self.action_bias += self.lr * action * (reward + 1.0)
                 self.action_bias = np.clip(self.action_bias, -0.5, 0.5)
@@ -551,7 +551,7 @@ class CL1Agent:
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME}")
         backend = "Cortical Labs cl-sdk" if CL_AVAILABLE else "Built-in mock"
         print(f"  Backend:  {backend}")
-        print(f"  Modules:  VIE + Antagonistic Decoder + PDI/FEP + Dopamine Injection")
+        print(f"  Modules:  VIE + Antagonistic Decoder + PDI/FEP + Predictable Stim Injection")
         print(f"  Record:   last {record_last_n} mature episodes\n")
 
         all_frames = []

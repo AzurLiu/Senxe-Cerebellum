@@ -218,7 +218,7 @@ class MockNeurons:
         Positive reward strengthens recently co-active pathways (LTP).
         Negative reward weakens them (LTD). This implements reward-modulated
         STDP, where the reward signal acts as a neuromodulatory gate on
-        Hebbian plasticity — analogous to dopaminergic modulation in
+        Hebbian plasticity — analogous to predictability-based active inference in
         biological cortical circuits.
 
         Args:

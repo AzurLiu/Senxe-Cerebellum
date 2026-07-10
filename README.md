@@ -182,7 +182,7 @@ senxe-cerebellum/
 │  └──────────┘    └─────────┘    └──────┬───────┘    └───┬────┘ │
 │       ▲                                │                │      │
 │       │                          ┌─────▼─────┐    ┌─────▼────┐ │
-│       │                          │ Dopamine / │    │  Action  │ │
+│       │                          │ Predictable / │    │  Action  │ │
 │       └──────────────────────────│ Punishment │◀───│  Output  │ │
 │              (env.step)          │ Injection  │    │ (7D OSC) │ │
 │                                  └─────┬─────┘    └──────────┘ │
@@ -202,8 +202,8 @@ senxe-cerebellum/
 | **HUD Rendering** | `core/hud.py` | Cold Cyberpunk Bloom visualization with EMA smoothing |
 | **Antagonistic Decoder** | `core/decoder.py` | Flexor/extensor differential + EMA smoothing (α-γ motor neuron model) |
 | **PDI + FEP** | `core/pdi.py` | Velocity/acceleration variance → explore/exploit (active inference) |
-| **Dopamine Injection** | `senxe_demo_robosuite.py` | Positive reward → structured burst on top-K channels (reward prediction error) |
-| **Punishment Injection** | `senxe_demo_robosuite.py` | Force violation → random noise on non-top channels (DishBrain unpredictable stim) |
+| **Predictable Stim Injection** | `senxe_demo_robosuite.py` | Positive reward → structured burst on top-K channels (reward prediction error) |
+| **Unpredictable Stim Injection** | `senxe_demo_robosuite.py` | Force violation → random noise on non-top channels (DishBrain unpredictable stim) |
 | **Metabolic Guardrail** | `core/neurons.py` | Per-channel health tracking prevents overstimulation (homeostatic regulation) |
 | **Channel Calibration** | `core/neurons.py` | 10-second warm-up probes all 64 channels for responsiveness ranking |
 | **Intrinsic Curiosity** | `core/curiosity.py` | Firing-pattern novelty detection drives exploration (information-theoretic) |
