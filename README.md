@@ -132,13 +132,9 @@ FORCE_SAFETY_THRESHOLD    = 20.0   # Newtons
 |:---:|:---|
 | `cl1_nutassembly.mp4` | CL1 bio-agent — last 80 mature episodes with force/torque HUD overlay |
 | `side_by_side_nutassembly.mp4` | Synchronized CL1 vs PPO side-by-side comparison |
-| `learning_curve_nutassembly.png` | Sample efficiency + Success Rate + Force Safety Rate |
 
-<p align="center">
-  <img src="learning_curve_nutassembly.png" alt="Learning Curve — CL1 vs PPO vs Random" width="680">
-  <br>
-  <em>Sample Efficiency: CL1 Bio-Computer vs PPO vs Random on NutAssembly</em>
-</p>
+
+
 
 ---
 
