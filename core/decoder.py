@@ -107,9 +107,11 @@ class AntagonisticDecoder:
         action = np.zeros(self.action_dim)
 
         for i in range(self.action_dim):
-            # Determine the range of channel pairs (0 to 31) assigned to this action dimension
-            p_lo = i * self.group_size
-            p_hi = 32 if i == self.action_dim - 1 else (i + 1) * self.group_size
+            # Distribute 32 pairs evenly across action_dim to prevent gripper dimension dominance
+            base = 32 // self.action_dim
+            rem = 32 % self.action_dim
+            p_lo = i * base + min(i, rem)
+            p_hi = p_lo + base + (1 if i < rem else 0)
 
             flex = 0.0
             ext = 0.0

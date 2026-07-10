@@ -37,7 +37,7 @@ class VIE:
        array focuses entirely on the CURRENT goal (Nut when searching, Peg when transporting).
 
     Args:
-        neurons: CL1 neurons instance (real or mock) with .stim() method.
+        neurons: CL1 neurons instance with .stim() method.
         force_threshold: Force safety threshold (N).
         depth_threshold: Insertion depth threshold (m).
         raw_env: Optional raw RoboSuite environment reference.
@@ -72,6 +72,14 @@ class VIE:
         # 0: SEARCHING (Target = Nut)
         # 1: TRANSPORTING (Target = Peg)
         self.attention_state = 0  
+
+    def reset(self):
+        """Reset temporal state trackers for a new episode. 
+        Note: channel_gain is preserved across episodes for long-term homeostasis."""
+        self.prev_force = np.zeros(3)
+        self.prev_torque = np.zeros(3)
+        self.prev_eef_pos = np.zeros(3)
+        self.attention_state = 0
 
     def encode(self, obs_info):
         """Encode observation using sparse delta coding and attention multiplexing.
@@ -110,23 +118,28 @@ class VIE:
         self.prev_torque = torque.copy()
         self.prev_eef_pos = eef_pos.copy()
 
-        # Encode Force Deltas (CH 0-11: 4 channels per axis for pos/neg changes)
+        # Encode Force Deltas (CH 0-11: 4 channels per axis for pos/neg and mag changes)
         for ax in range(3):
             df = d_force[ax]
             if abs(df) > 0.5:  # Noise threshold
-                ch_idx = self.CH_FORCE[ax * 4 + (0 if df > 0 else 2)]
-                inten = np.clip(abs(df) * 0.5, 0.1, 2.0)
-                hz = int(np.clip(50 + abs(df) * 20, 50, 300))
+                # Use all 4 channels per axis: 0=small+, 1=large+, 2=small-, 3=large-
+                mag_idx = 0 if abs(df) < 3.0 else 1
+                ch_idx = self.CH_FORCE[ax * 4 + (0 if df > 0 else 2) + mag_idx]
+                gain = self.channel_gain[ch_idx]
+                inten = np.clip(abs(df) * 0.5 * gain, 0.1, 2.0)
+                hz = int(np.clip(50 + abs(df) * 20 * gain, 50, 300))
                 fs = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), fs, BurstDesign(2, hz))
 
-        # Encode Torque Deltas (CH 12-23)
+        # Encode Torque Deltas (CH 12-23: 4 channels per axis)
         for ax in range(3):
             dt = d_torque[ax]
             if abs(dt) > 0.1:
-                ch_idx = self.CH_TORQUE[ax * 4 + (0 if dt > 0 else 2)]
-                inten = np.clip(abs(dt) * 2.0, 0.1, 2.0)
-                hz = int(np.clip(50 + abs(dt) * 50, 50, 300))
+                mag_idx = 0 if abs(dt) < 1.0 else 1
+                ch_idx = self.CH_TORQUE[ax * 4 + (0 if dt > 0 else 2) + mag_idx]
+                gain = self.channel_gain[ch_idx]
+                inten = np.clip(abs(dt) * 2.0 * gain, 0.1, 2.0)
+                hz = int(np.clip(50 + abs(dt) * 50 * gain, 50, 300))
                 ts = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), ts, BurstDesign(2, hz))
 
@@ -137,9 +150,10 @@ class VIE:
                 v = eef_vel[ax]
                 if abs(v) > 0.01:
                     cb = self.CH_VELOCITY[ax]
-                    vi = np.clip(abs(v) * 3, 0.1, 2.0)
+                    gain = self.channel_gain[cb]
+                    vi = np.clip(abs(v) * 3 * gain, 0.1, 2.0)
                     vs = StimDesign(160, -vi, 160, vi)
-                    vhz = int(np.clip(60 * abs(v), 20, 200))
+                    vhz = int(np.clip(60 * abs(v) * gain, 20, 200))
                     self.neurons.stim(ChannelSet(cb), vs, BurstDesign(1, vhz))
 
         # ── 3. High-Resolution Spatial Attention Array (CH 28-54) ──
@@ -152,8 +166,9 @@ class VIE:
             ch_idx = self.CH_SPATIAL[ax * 9 + bin_idx]
             
             # Fire strongly if we are exactly in this bin
-            hz = int(np.clip(100 + abs(val) * 200, 50, 350))
-            inten = np.clip(0.5 + abs(val), 0.1, 1.5)
+            gain = self.channel_gain[ch_idx]
+            hz = int(np.clip((100 + abs(val) * 200) * gain, 50, 350))
+            inten = np.clip((0.5 + abs(val)) * gain, 0.1, 1.5)
             ps = StimDesign(160, -inten, 160, inten)
             self.neurons.stim(ChannelSet(ch_idx), ps, BurstDesign(2, hz))
 
@@ -167,9 +182,11 @@ class VIE:
             depth = self._compute_depth(obs_info)
             if depth > 0.01:
                 dn = np.clip(depth / self.depth_threshold, 0.0, 2.0)
-                dhz = int(np.clip(50 + 300 * dn, 50, 400))
-                dstim = StimDesign(160, -0.8, 160, 0.8)
-                self.neurons.stim(ChannelSet(self.CH_STATE[2]), dstim, BurstDesign(2, dhz))
+                ch_idx = self.CH_STATE[2]
+                gain = self.channel_gain[ch_idx]
+                dhz = int(np.clip((50 + 300 * dn) * gain, 50, 400))
+                dstim = StimDesign(160, -0.8 * gain, 160, 0.8 * gain)
+                self.neurons.stim(ChannelSet(ch_idx), dstim, BurstDesign(2, dhz))
 
     def adapt(self, firing_rates):
         """Online adaptation of channel encoding gains (Homeostasis)."""
