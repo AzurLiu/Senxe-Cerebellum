@@ -1,17 +1,30 @@
 # Senxe Cerebellum: Biologically-Grounded Robotic Motor Control
 
 > [!WARNING]
-> **Project Falsified (Archived)**
-> This project has been falsified by the author. The fundamental task cannot be completed because the conservative memory window of the CL1 system is strictly limited to 20ms, which is insufficient for the temporal dependencies required by this framework.
+> **Original End-to-End Hypothesis Retired**
+> Direct seven-dimensional wetware control is no longer the default research
+> claim. The active development path uses a deterministic nominal controller
+> for task phase and a confidence-gated five-output CL1 contact skill:
+> three-axis translation correction, safe softening, and retract selection.
+> This remains a pre-hardware hypothesis, not evidence of biological learning.
 
 Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
 
-The framework maps multi-modal physical sensor readings (force, torque, kinematics) into closed-loop electrical stimulation patterns and decodes biological firing outputs (spikes) into continuous action trajectories to solve force-sensitive assembly tasks (such as the RoboSuite NutAssembly benchmark).
+The default experiment compresses alignment error, contact force and external
+task phase into sparse stimulation. Biological firing is decoded into a bounded
+contact skill while planning, rotation, gripper intent, joint control and hard
+safety remain deterministic.
+
+> [!IMPORTANT]
+> The audited application currently couples CL1 to a **RoboSuite Panda
+> simulation**. It does not contain a ROS / libfranka physical-arm driver,
+> hardware watchdog, or certified emergency-stop integration and must not be
+> represented as physical-robot-ready.
 
 <p align="center">
   <img src="assets/hud_preview.png" alt="Senxe Cerebellum Live Telemetry HUD Overlay" width="720">
   <br>
-  <em>Senxe Cerebellum v4.0 Live HUD Telemetry Overlay (RoboSuite NutAssembly task on Franka Panda)</em>
+  <em>Senxe Cerebellum Contact-Skill HUD (RoboSuite NutAssembly task on Franka Panda)</em>
 </p>
 
 > [!NOTE]
@@ -21,24 +34,57 @@ The framework maps multi-modal physical sensor readings (force, torque, kinemati
 
 ## Core Scientific Modules
 
-### 1. Neuromorphic Event-Driven Sparse Coding (VIE)
-The **Virtual Interference Encoding (VIE)** module ([core/vie.py](core/vie.py)) maps continuous environment observations onto the 64-channel microelectrode array (MEA). 
-*   **Sparse Encoding**: To minimize signal crosstalk and cellular overstimulation, sensory modalities (e.g., force/torque deltas) are encoded using delta-tracking. Electrodes are only stimulated when physical quantities change significantly.
-*   **Attention Multiplexing**: Channels are dynamically reallocated between visual/tactile sensory modalities based on the robot's current task phase (searching vs. inserting).
+### 1. Compact Contact Encoding
+The default [contact-skill module](core/contact_skill.py) encodes only:
 
-### 2. Antagonistic Muscle-Pair Decoding
-Motor outputs are decoded based on the biological flexor/extensor antagonistic principle ([core/decoder.py](core/decoder.py)). 
-*   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations (Even/Odd pairs). Each of the 7 action dimensions is driven by the differential activity:
+* three-axis peg alignment error;
+* three-axis contact force;
+* externally maintained task phase and contact severity.
+
+Each position and force axis uses a positive/negative electrode pair, while
+magnitude is carried by bounded pulse amplitude rather than extra small/large
+electrodes. Seven phases use the non-zero patterns of three phase electrodes.
+The older high-dimensional VIE encoder remains available only in legacy modes.
+
+The confirmatory path uses a fixed, hardware-valid allocation:
+
+| Role | Channels | Purpose |
+|---|---:|---|
+| sensory stimulation | 18 | signed XYZ position/force, phase, contact |
+| motor readout | 20 | five outputs, two positive and two negative each |
+| structured feedback | 6 | three positive and three negative |
+| reserve | 15 | failed-channel replacement under a preregistered rule |
+
+CL1 channels `0`, `4`, `7`, `56`, and `63` are never stimulated. Sensory,
+motor, feedback, and reserve regions are pairwise disjoint. The exact mapping
+and its SHA-256 are stored with every evidence run.
+
+### 2. Five-Output Contact Skill
+Motor outputs use the transparent antagonistic count decoder
+([core/decoder.py](core/decoder.py)). Five outputs are decoded:
+
+```text
+[delta_x, delta_y, delta_z, soften, retract]
+```
+
+*   **Opposing Populations**: Each output has a fixed four-electrode readout
+    containing two positive and two negative channels:
     $$\text{Action}[i] = \frac{\text{flexor} - \text{extensor}}{\text{flexor} + \text{extensor} + \epsilon}$$
-*   **EMA Inertia Filter**: Outputs are smoothed using an Exponential Moving Average (EMA) filter to mimic the biomechanical damping and inertia of physical muscle tissue, producing jerk-free trajectories.
+    Sensory, feedback, and reserve spikes are ignored by the motor decoder.
+*   **Safety semantics**: `soften` can only reduce movement authority.
+    `retract` selects a deterministic force-opposing retreat primitive.
 
-### 3. FEP-Driven Kinematic Gate (PDI)
-Rather than using hand-tuned exploration schedules, exploration is regulated by the **Physical Disturbance Index (PDI)** ([core/pdi.py](core/pdi.py)). Inspired by the Free Energy Principle (FEP):
-*   **High PDI** (unstable kinematics, high sensory surprise) increases Gaussian perturbation to force exploration and surprise minimization.
-*   **Low PDI** (stable kinematics, low surprise) limits perturbation to exploit the current steady-state control policy.
+### 3. External Planning and Safety
+The deterministic controller owns approach, grasp, transport, rotation,
+gripper intent and hard force limits. CL1 authority is enabled only during
+transport/contact phases and is independently bounded on X, Y and Z.
 
-### 4. Intrinsic Firing-Rate Curiosity
-The **Neural Curiosity** module ([core/curiosity.py](core/curiosity.py)) monitors firing pattern novelty. Novel electrophysiological patterns boost the exploration rate, driving the neural network to escape local minima in silent or repetitive states.
+### 4. Frozen Physical Generalization
+Train scenarios vary peg offset, yaw and nut friction. Frozen evaluation uses a
+disjoint held-out physics set from
+[config/contact_generalization.json](config/contact_generalization.json).
+Zero-spike, shuffled-spike, no-feedback and nominal-only controls use paired
+scenario seeds.
 
 ---
 
@@ -46,58 +92,17 @@ The **Neural Curiosity** module ([core/curiosity.py](core/curiosity.py)) monitor
 
 ```mermaid
 graph TB
-    subgraph Env [RoboSuite Environment]
-        RS[Franka Panda Arm] -->|Tactile Sensory| F["Force (3D) & Torque (3D)"]
-        RS -->|Kinematics| V["EEF Position & Velocity"]
-        RS -->|Spatial Target| T["Peg-to-Hole Target Vector"]
-    end
-
-    subgraph Enc [Virtual Interference Encoding]
-        F -->|Sparse Delta Coding| SDC["Delta Change Filter"]
-        V -->|Attention Multiplexing| AMUX["Task Stage Router"]
-        T -->|Tuning Curves| TC["Spatial Tuning (27 bins)"]
-        SDC & AMUX & TC -->|Homeostatic Gain| Gain["Gain Adaptation (channel_gain)"]
-        Gain -->|Pulse Design| Stim["64-ch MEA Stimulation Design"]
-    end
-
-    subgraph Bio [CL1 Wetware Platform]
-        Stim -->|Electrical Pulse| MEA["64-ch Electrode Array"]
-        MEA -->|Evoke Activity| Neu["Biological Neurons (STDP)"]
-        Neu -->|Extracellular Recording| Spikes["Spike Train Extraction (threshold 99.5%)"]
-    end
-
-    subgraph Dec [Antagonistic Motor Decoder]
-        Spikes -->|Even Channels| Flex["Flexor Population Sum"]
-        Spikes -->|Odd Channels| Ext["Extensor Population Sum"]
-        Flex & Ext -->|Differential Actuation| Diff["(Flex - Ext) / (Flex + Ext)"]
-        Diff -->|Mechanical Inertia| EMA["EMA Smoothing Filter"]
-        EMA -->|Continuous Control| Act["7D Joint Action Output"]
-    end
-
-    subgraph Gate [FEP Active Inference Gate]
-        V -->|Velocity Variance| PDI["Physical Disturbance Index (PDI)"]
-        Spikes -->|Firing Rate Novelty| Cur["Neural Curiosity"]
-        PDI & Cur -->|Exploration Noise| Noise["explore_noise (Gaussian)"]
-    end
-
-    Act -->|env.step| RS
-    Noise -->|Perturbation| Act
-    RS -->|Reward & Collisions| FB["Stimulus Reinforcement"]
-    FB -->|Predictable Stim| MEA
-    FB -->|Unpredictable Noise| MEA
-
-    %% Styles
-    classDef envStyle fill:#0b132b,stroke:#48cae4,stroke-width:2px,color:#fff;
-    classDef encStyle fill:#1c2541,stroke:#00b4d8,stroke-width:2px,color:#fff;
-    classDef bioStyle fill:#102c57,stroke:#ff5757,stroke-width:2px,color:#fff;
-    classDef decStyle fill:#1b4d3e,stroke:#2ecc71,stroke-width:2px,color:#fff;
-    classDef gateStyle fill:#3a0ca3,stroke:#7209b7,stroke-width:2px,color:#fff;
-
-    class RS,F,V,T envStyle;
-    class SDC,AMUX,TC,Gain,Stim encStyle;
-    class MEA,Neu,Spikes bioStyle;
-    class Flex,Ext,Diff,EMA,Act decStyle;
-    class PDI,Cur,Noise,FB gateStyle;
+    Robot["Franka Panda + force sensor"] --> State["Alignment XYZ + force XYZ"]
+    Planner["External task phase + nominal action"] --> Encoder["Compact contact encoder"]
+    State --> Encoder
+    Encoder --> CL1["CL1 / CL SDK"]
+    CL1 --> Window["50 ms artifact wait + 50 ms spike window"]
+    Window --> Skill["delta XYZ + soften + retract"]
+    Skill --> Safety["Confidence, phase and force safety supervisor"]
+    Planner --> Safety
+    Safety --> Robot
+    Robot --> Feedback["Progress / collision / success event"]
+    Feedback --> CL1
 ```
 
 ---
@@ -118,7 +123,7 @@ Since the initial release (`a1057ea` on April 13, 2026), the framework has under
 
 ### 3. Scientific Rigor & Benchmarking
 *   **FEP Terminology Alignment**: Deep-cleaned the codebase to replace reward-centric terminology (like "Dopamine Injection" and "Punishment") with information-theoretic terminology ("Predictable Stimulation" and "Unpredictable Stimulation"), aligning with the Free Energy Principle.
-*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against control groups (no-stim, zero-spikes, and randomized-spikes).
+*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against nominal-only, no-feedback, zero-spike, and count-preserving shuffled-spike controls.
 *   **Fair Baseline Comparison**: Removed hindsight experience replay (HER) reward injection during the PPO evaluation loop to guarantee a scientifically honest comparison between biological and silicon baselines.
 
 ---
@@ -144,15 +149,87 @@ Run the primary training script:
 ```bash
 python senxe_demo_robosuite.py
 ```
-This script runs the 7-DoF Franka Panda robot arm task, trains the biological agent, and saves a Cyberpunk-styled video overlay `cl1_nutassembly.mp4` displaying the MEA grid, force telemetry, and live status watermarks.
+The default is the 22-episode CL1 access-application profile and the bounded
+five-output contact skill:
+```bash
+export SENXE_CONTROL_MODE=contact_skill
+export SENXE_GENERALIZATION=1
+```
+This primary path does not construct the legacy VIE, PDI, Curiosity, legacy
+decoder, or single-axis residual controller. The application profile validates
+software plumbing and safety evidence; it does not claim biological learning.
+The default neural input path consumes SDK-detected spikes with their original
+CL frame timestamps. It observes a post-stimulation artifact interval before
+collecting decoder features:
+```bash
+export SENXE_SPIKE_PIPELINE=timestamped
+export SENXE_ARTIFACT_WAIT_MS=50
+export SENXE_COLLECT_WINDOW_MS=50
+export SENXE_SPIKE_BIN_MS=10
+```
+The raw-voltage percentile detector is retained only for explicit compatibility:
+```bash
+export SENXE_SPIKE_PIPELINE=legacy_voltage
+```
+Optional HDF5 session recording includes raw samples, detected spikes,
+stimulations, and the synchronized `senxe_control` data stream:
+```bash
+export SENXE_RECORD_SESSION=1
+export SENXE_RECORDING_LOCATION=recordings
+```
+The audited RoboSuite agent now accepts only `contact_skill`. Historical
+direct-decoder demonstrations remain isolated in `senxe_demo.py` and are not
+part of the CL1 application or confirmatory evidence path.
+This script runs the 7-DoF Franka Panda on the single-object
+`NutAssemblySquare` task and saves a Cyberpunk-styled video overlay
+`cl1_nutassembly.mp4`. Episode success is binary and comes only from
+RoboSuite's official placement check; the older end-effector-distance
+heuristic has been removed.
+
+The current CL1-ready protocol and its evidence boundaries are documented in
+[docs/CL1_PROTOCOL_V2.md](docs/CL1_PROTOCOL_V2.md). Simulator results validate
+software timing and causal controls only; they are not biological-learning
+evidence.
 
 ### 4. Run the Ablation Study
-To run the automated information-nullification benchmark:
+To run a simulator-only full software benchmark:
 ```bash
 python run_ablation_benchmark.py
+python analyze_ablations.py ablation_results.csv
 python plot_ablations.py
 ```
-This will run headless control trials and save a learning curve comparison to `ablation_plot.png`.
+Real CL1 defaults to one condition per independent culture invocation:
+```bash
+export SENXE_LAB_APPROVED_STIM=1
+export SENXE_MAX_STIM_AMPLITUDE_UA=1.5
+export SENXE_MAX_STIM_PHASE_WIDTH_US=200
+export SENXE_MAX_STIM_BURST_HZ=200
+export SENXE_MAX_STIM_BURST_COUNT=15
+export SENXE_MAX_STIM_CALLS=<lab-approved-limit>
+export SENXE_MAX_STIM_CHANNEL_PULSES=<lab-approved-limit>
+export SENXE_MAX_STIM_ABS_CHARGE_NC=<lab-approved-limit>
+export SENXE_RECORD_SESSION=1
+export SENXE_BENCHMARK_PROTOCOL_ID=senxe_contact_skill_v2
+python run_ablation_benchmark.py \
+  --condition contact_skill \
+  --culture-id culture_001 \
+  --sequence-index 0
+```
+For the yoked control, provide a donor schedule exported by an independent
+`contact_skill` run:
+```bash
+python run_ablation_benchmark.py \
+  --condition yoked_feedback \
+  --culture-id culture_002 \
+  --sequence-index 1 \
+  --yoked-feedback feedback_schedules/culture_001_seq0_contact_skill.json
+```
+The preregistered endpoints, retention requirements, biological replicate
+rules, and falsification criteria are defined in
+[docs/PREREGISTRATION_V2.md](docs/PREREGISTRATION_V2.md).
+The shorter access-application boundary and its fail-closed hardware gates are
+defined in
+[docs/CL1_APPLICATION_PROTOCOL.md](docs/CL1_APPLICATION_PROTOCOL.md).
 
 ---
 

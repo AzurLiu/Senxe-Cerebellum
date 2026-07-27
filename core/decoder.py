@@ -8,7 +8,9 @@ Inspired by the antagonistic muscle pairs in vertebrate motor systems
 (e.g., biceps/triceps), it converts raw neural spike channels into smooth,
 continuous action vectors suitable for robotic control.
 
-64 channels are interleaved into two antagonistic populations (Even/Odd pairs):
+The confirmatory contact-skill path supplies explicit, disjoint positive and
+negative channel groups. Legacy modes retain the historical 64-channel
+even/odd mapping:
 
     Flexor   (Even CH: 0, 2, 4...) → positive force per action dimension
     Extensor (Odd CH: 1, 3, 5...)  → negative force per action dimension
@@ -27,17 +29,18 @@ jerk-free trajectories suitable for force-sensitive industrial tasks.
 
 from __future__ import annotations
 
+from typing import List, Optional, Sequence
+
 import numpy as np
-from typing import List, Optional
 
 
 class AntagonisticDecoder:
     """Antagonistic Decoder — converts spike channels to smoothed action vectors.
 
     Maps spiking activity from a 64-channel MEA onto an N-dimensional action
-    space using the biological flexor/extensor antagonistic principle. Each
-    action dimension is controlled by a pair of channel sub-populations whose
-    differential activity determines the output magnitude and direction.
+    space using positive/negative antagonistic populations. Confirmatory paths
+    pass fixed channel groups; omitted groups select the historical even/odd
+    whole-array mapping for legacy comparisons.
 
     The decoder supports optional per-channel weighting from calibration data,
     allowing more responsive channels to contribute proportionally more to
@@ -53,6 +56,8 @@ class AntagonisticDecoder:
         channel_weights: Optional (64,) array of per-channel weights from
                          warm-up calibration. If provided, each spike
                          contributes its channel's weight instead of 1.0.
+        channel_groups: Optional explicit positive/negative channel groups,
+                        one pair of populations per action dimension.
     """
 
     def __init__(
@@ -61,17 +66,38 @@ class AntagonisticDecoder:
         ema_alpha: float = 0.35,
         action_scale: float = 0.25,
         channel_weights: Optional[np.ndarray] = None,
+        channel_groups: Optional[
+            Sequence[tuple[Sequence[int], Sequence[int]]]
+        ] = None,
     ) -> None:
+        if action_dim <= 0:
+            raise ValueError("action_dim must be positive")
+        if not 0.0 <= ema_alpha <= 1.0:
+            raise ValueError("ema_alpha must be in [0, 1]")
         self.action_dim: int = action_dim
         self.group_size: int = max(1, 32 // action_dim)
         self.ema_alpha: float = ema_alpha
         self.action_scale: float = action_scale
         self.prev_action: np.ndarray = np.zeros(action_dim)
+        self.channel_groups = _normalize_channel_groups(
+            action_dim,
+            channel_groups,
+        )
 
         # Population vector weights from calibration responsiveness
         if channel_weights is not None:
             self.ch_weights = np.array(channel_weights, dtype=np.float64)
-            self.ch_weights = np.maximum(self.ch_weights, 0.0)  # Prevent negative weights
+            if self.ch_weights.shape != (64,):
+                raise ValueError("channel_weights must have shape (64,)")
+            self.ch_weights = np.where(
+                np.isfinite(self.ch_weights),
+                self.ch_weights,
+                0.0,
+            )
+            self.ch_weights = np.maximum(
+                self.ch_weights,
+                0.0,
+            )
             self.ch_weights = self.ch_weights / (self.ch_weights.max() + 1e-6)
         else:
             self.ch_weights = np.ones(64)
@@ -105,10 +131,50 @@ class AntagonisticDecoder:
         Returns:
             np.ndarray: Action vector of shape (action_dim,), clipped to [-1, 1].
         """
+        channel_counts = np.bincount(
+            np.asarray(spike_channels, dtype=np.int64),
+            minlength=64,
+        )[:64]
+        return self.decode_counts(channel_counts, pdi_boost=pdi_boost)
+
+    def decode_counts(
+        self,
+        channel_counts: np.ndarray,
+        pdi_boost: float = 0.0,
+    ) -> np.ndarray:
+        """Decode per-channel spike counts without discarding temporal density.
+
+        ``decode`` remains the compatibility entry point.  The timestamped CL1
+        pipeline calls this method so repeated spikes on one electrode retain
+        their contribution rather than being collapsed to channel presence.
+        """
+
+        counts = np.asarray(channel_counts, dtype=np.float64)
+        if counts.shape != (64,):
+            raise ValueError("channel_counts must have shape (64,)")
+        counts = np.maximum(counts, 0.0)
         action = np.zeros(self.action_dim)
 
+        if self.channel_groups is not None:
+            for index, (positive_channels, negative_channels) in enumerate(
+                self.channel_groups
+            ):
+                positive = float(np.sum(
+                    counts[list(positive_channels)]
+                    * self.ch_weights[list(positive_channels)]
+                ))
+                negative = float(np.sum(
+                    counts[list(negative_channels)]
+                    * self.ch_weights[list(negative_channels)]
+                ))
+                action[index] = (
+                    (positive - negative)
+                    / (positive + negative + 1e-6)
+                )
+            return self._smooth_and_scale(action, pdi_boost)
+
         for i in range(self.action_dim):
-            # Distribute 32 pairs evenly across action_dim to prevent gripper dimension dominance
+            # Legacy path: distribute all 32 channel pairs across action_dim.
             base = 32 // self.action_dim
             rem = 32 % self.action_dim
             p_lo = i * base + min(i, rem)
@@ -119,13 +185,18 @@ class AntagonisticDecoder:
             for p in range(p_lo, p_hi):
                 ch_f = 2 * p      # Even channel -> Flexor
                 ch_e = 2 * p + 1  # Odd channel -> Extensor
-                if ch_f in spike_channels:
-                    flex += self.ch_weights[ch_f]
-                if ch_e in spike_channels:
-                    ext += self.ch_weights[ch_e]
+                flex += counts[ch_f] * self.ch_weights[ch_f]
+                ext += counts[ch_e] * self.ch_weights[ch_e]
 
             action[i] = (flex - ext) / (flex + ext + 1e-6)
 
+        return self._smooth_and_scale(action, pdi_boost)
+
+    def _smooth_and_scale(
+        self,
+        action: np.ndarray,
+        pdi_boost: float,
+    ) -> np.ndarray:
         # FEP: high PDI (unstable state) → inject exploration noise
         if pdi_boost > 0.1:
             action += np.random.randn(self.action_dim) * pdi_boost * 0.25
@@ -139,3 +210,45 @@ class AntagonisticDecoder:
     def reset(self) -> None:
         """Reset EMA state for a new episode."""
         self.prev_action = np.zeros(self.action_dim)
+
+
+def _normalize_channel_groups(
+    action_dim: int,
+    channel_groups: Optional[
+        Sequence[tuple[Sequence[int], Sequence[int]]]
+    ],
+) -> Optional[
+    tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+]:
+    if channel_groups is None:
+        return None
+    if len(channel_groups) != action_dim:
+        raise ValueError("channel_groups length must match action_dim")
+
+    normalized = []
+    used: set[int] = set()
+    for index, (positive, negative) in enumerate(channel_groups):
+        positive_channels = tuple(int(channel) for channel in positive)
+        negative_channels = tuple(int(channel) for channel in negative)
+        if not positive_channels or not negative_channels:
+            raise ValueError(
+                f"channel group {index} must have both signs"
+            )
+        group_channels = positive_channels + negative_channels
+        if any(channel < 0 or channel >= 64 for channel in group_channels):
+            raise ValueError(
+                f"channel group {index} contains a channel outside 0..63"
+            )
+        if len(group_channels) != len(set(group_channels)):
+            raise ValueError(
+                f"channel group {index} contains duplicate channels"
+            )
+        overlap = used & set(group_channels)
+        if overlap:
+            raise ValueError(
+                "channel_groups must be disjoint; overlapping channels: "
+                f"{sorted(overlap)}"
+            )
+        used.update(group_channels)
+        normalized.append((positive_channels, negative_channels))
+    return tuple(normalized)

@@ -55,11 +55,14 @@ class VIE:
     CH_RESERVED      = _all_channels[60:64]     # Reserved
 
     def __init__(self, neurons, force_threshold=20.0, depth_threshold=0.02,
-                 raw_env=None):
+                 raw_env=None, max_stim_amplitude=2.0):
         self.neurons = neurons
         self.raw_env = raw_env
         self.force_threshold = force_threshold
         self.depth_threshold = depth_threshold
+        self.max_stim_amplitude = float(max_stim_amplitude)
+        if self.max_stim_amplitude <= 0:
+            raise ValueError("max_stim_amplitude must be positive")
         self.channel_gain = np.ones(64)      
         self.adaptation_rate = 0.005
 
@@ -126,8 +129,8 @@ class VIE:
                 mag_idx = 0 if abs(df) < 3.0 else 1
                 ch_idx = self.CH_FORCE[ax * 4 + (0 if df > 0 else 2) + mag_idx]
                 gain = self.channel_gain[ch_idx]
-                inten = np.clip(abs(df) * 0.5 * gain, 0.1, 2.0)
-                hz = int(np.clip(50 + abs(df) * 20 * gain, 50, 300))
+                inten = self._bounded_amplitude(abs(df) * 0.5 * gain)
+                hz = int(np.clip(50 + abs(df) * 20 * gain, 50, 200))
                 fs = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), fs, BurstDesign(2, hz))
 
@@ -138,8 +141,8 @@ class VIE:
                 mag_idx = 0 if abs(dt) < 1.0 else 1
                 ch_idx = self.CH_TORQUE[ax * 4 + (0 if dt > 0 else 2) + mag_idx]
                 gain = self.channel_gain[ch_idx]
-                inten = np.clip(abs(dt) * 2.0 * gain, 0.1, 2.0)
-                hz = int(np.clip(50 + abs(dt) * 50 * gain, 50, 300))
+                inten = self._bounded_amplitude(abs(dt) * 2.0 * gain)
+                hz = int(np.clip(50 + abs(dt) * 50 * gain, 50, 200))
                 ts = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), ts, BurstDesign(2, hz))
 
@@ -151,7 +154,7 @@ class VIE:
                 if abs(v) > 0.01:
                     cb = self.CH_VELOCITY[ax]
                     gain = self.channel_gain[cb]
-                    vi = np.clip(abs(v) * 3 * gain, 0.1, 2.0)
+                    vi = self._bounded_amplitude(abs(v) * 3 * gain)
                     vs = StimDesign(160, -vi, 160, vi)
                     vhz = int(np.clip(60 * abs(v) * gain, 20, 200))
                     self.neurons.stim(ChannelSet(cb), vs, BurstDesign(1, vhz))
@@ -167,15 +170,25 @@ class VIE:
             
             # Fire strongly if we are exactly in this bin
             gain = self.channel_gain[ch_idx]
-            hz = int(np.clip((100 + abs(val) * 200) * gain, 50, 350))
-            inten = np.clip((0.5 + abs(val)) * gain, 0.1, 1.5)
+            hz = int(np.clip((100 + abs(val) * 200) * gain, 50, 200))
+            inten = self._bounded_amplitude((0.5 + abs(val)) * gain)
             ps = StimDesign(160, -inten, 160, inten)
             self.neurons.stim(ChannelSet(ch_idx), ps, BurstDesign(2, hz))
 
         # ── 4. State Flag & Depth (CH 55-59) ──
         # Let the network know WHICH attention state it's currently in
         state_ch = self.CH_STATE[self.attention_state]
-        self.neurons.stim(ChannelSet(state_ch), StimDesign(160, -1.0, 160, 1.0), BurstDesign(2, 100))
+        state_amplitude = self._bounded_amplitude(1.0)
+        self.neurons.stim(
+            ChannelSet(state_ch),
+            StimDesign(
+                160,
+                -state_amplitude,
+                160,
+                state_amplitude,
+            ),
+            BurstDesign(2, 100),
+        )
 
         if self.attention_state == 1:
             # If transporting, encode depth explicitly to guide insertion
@@ -184,9 +197,22 @@ class VIE:
                 dn = np.clip(depth / self.depth_threshold, 0.0, 2.0)
                 ch_idx = self.CH_STATE[2]
                 gain = self.channel_gain[ch_idx]
-                dhz = int(np.clip((50 + 300 * dn) * gain, 50, 400))
-                dstim = StimDesign(160, -0.8 * gain, 160, 0.8 * gain)
+                dhz = int(np.clip((50 + 300 * dn) * gain, 50, 200))
+                depth_amplitude = self._bounded_amplitude(0.8 * gain)
+                dstim = StimDesign(
+                    160,
+                    -depth_amplitude,
+                    160,
+                    depth_amplitude,
+                )
                 self.neurons.stim(ChannelSet(ch_idx), dstim, BurstDesign(2, dhz))
+
+    def _bounded_amplitude(self, value):
+        return float(np.clip(
+            value,
+            min(0.1, self.max_stim_amplitude),
+            self.max_stim_amplitude,
+        ))
 
     def adapt(self, firing_rates):
         """Online adaptation of channel encoding gains (Homeostasis)."""
@@ -200,4 +226,3 @@ class VIE:
         """Compute insertion depth from peg-to-hole distance."""
         d = np.linalg.norm(obs_info["peg_to_hole"])
         return max(0.0, 0.1 - d)
-

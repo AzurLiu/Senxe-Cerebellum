@@ -7,7 +7,6 @@ Run:  pytest tests/test_core.py -v
 """
 
 import numpy as np
-import pytest
 
 from core.decoder import AntagonisticDecoder
 from core.pdi import PDI
@@ -111,6 +110,20 @@ class TestAntagonisticDecoder:
         action = d.decode(spikes)
         assert action.shape == (7,)
         assert np.all(action >= -1.0) and np.all(action <= 1.0)
+
+    def test_count_decoder_keeps_repeated_spike_information(self):
+        d = AntagonisticDecoder(
+            action_dim=4,
+            ema_alpha=1.0,
+            action_scale=1.0,
+        )
+        counts = np.zeros(64)
+        counts[0] = 3
+        counts[1] = 1
+
+        action = d.decode_counts(counts)
+
+        assert action[0] > 0.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -235,4 +248,3 @@ def test_hud_vie_mapping_alignment():
         
     for ch in range(64):
         assert hud_map[ch] == vie_map[ch], f"Mismatch at channel {ch}: HUD has {hud_map[ch]}, VIE has {vie_map[ch]}"
-
