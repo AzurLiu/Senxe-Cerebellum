@@ -69,7 +69,12 @@ class SpikeWindow:
     collect_start_timestamp: int | None
     collect_end_timestamp: int | None
     artifact_spike_count: int
+    trigger_stim_timestamps: tuple[int, ...]
     stim_timestamps: tuple[int, ...]
+    trigger_to_collect_ms: float | None
+    timing_valid: bool | None
+    observed_tick_count: int
+    expected_tick_count: int
     events: tuple[SpikeEvent, ...]
     features: SpikeFeatures
 
@@ -107,7 +112,11 @@ class SpikeWindowReader:
             self.config.collect_window_ms / self.config.tick_ms
         ))
 
-    def read(self) -> SpikeWindow:
+    def read(
+        self,
+        *,
+        trigger_stim_timestamps: Sequence[int] = (),
+    ) -> SpikeWindow:
         total_ticks = self._artifact_ticks + self._collect_ticks
         loop = self.neurons.loop(
             ticks_per_second=self.ticks_per_second,
@@ -121,8 +130,10 @@ class SpikeWindowReader:
         artifact_spike_count = 0
         events_raw: list[tuple[int, int]] = []
         stim_timestamps: list[int] = []
+        observed_tick_count = 0
 
         for tick_index, tick in enumerate(loop):
+            observed_tick_count += 1
             tick_timestamp = int(tick.timestamp)
             frames = np.asarray(tick.frames)
             frame_count = int(frames.shape[0]) if frames.ndim >= 1 else 0
@@ -155,13 +166,32 @@ class SpikeWindowReader:
             frame_rate_hz=self.frame_rate_hz,
             config=self.config,
         )
+        triggers = tuple(
+            sorted(int(timestamp) for timestamp in trigger_stim_timestamps)
+        )
+        trigger_to_collect_ms = None
+        timing_valid = None
+        if triggers and collect_start is not None:
+            trigger_to_collect_ms = (
+                int(collect_start) - max(triggers)
+            ) / (self.frame_rate_hz / 1000.0)
+            timing_valid = bool(
+                observed_tick_count == total_ticks
+                and trigger_to_collect_ms + 1e-9
+                >= self.config.artifact_wait_ms
+            )
         return SpikeWindow(
             frame_rate_hz=self.frame_rate_hz,
             artifact_start_timestamp=artifact_start,
             collect_start_timestamp=collect_start,
             collect_end_timestamp=collect_end,
             artifact_spike_count=artifact_spike_count,
+            trigger_stim_timestamps=triggers,
             stim_timestamps=tuple(stim_timestamps),
+            trigger_to_collect_ms=trigger_to_collect_ms,
+            timing_valid=timing_valid,
+            observed_tick_count=observed_tick_count,
+            expected_tick_count=total_ticks,
             events=events,
             features=features,
         )
@@ -218,17 +248,44 @@ def ablate_channel_counts(
     mode: str,
     *,
     rng: np.random.Generator,
+    channel_subset: Sequence[int] | None = None,
 ) -> np.ndarray:
-    """Apply a count-preserving spike ablation for causal controls."""
+    """Apply a count-preserving spike ablation for causal controls.
+
+    When ``channel_subset`` is supplied, shuffling is restricted to the
+    decoder's readout electrodes. This preserves total motor-readout activity
+    while destroying channel identity, instead of also changing how many
+    spikes reach the decoder.
+    """
 
     counts = np.asarray(channel_counts, dtype=np.int64)
+    if counts.ndim != 1:
+        raise ValueError("channel_counts must be one-dimensional")
     normalized_mode = str(mode).strip().lower()
     if normalized_mode in {"none", "full"}:
         return counts.copy()
     if normalized_mode == "zero":
         return np.zeros_like(counts)
     if normalized_mode in {"random", "shuffled"}:
-        return counts[rng.permutation(len(counts))]
+        if channel_subset is None:
+            return counts[rng.permutation(len(counts))]
+        subset = np.asarray(
+            tuple(int(channel) for channel in channel_subset),
+            dtype=np.int64,
+        )
+        if subset.size == 0:
+            raise ValueError("channel_subset must not be empty")
+        if (
+            np.any(subset < 0)
+            or np.any(subset >= len(counts))
+            or len(set(subset.tolist())) != subset.size
+        ):
+            raise ValueError(
+                "channel_subset must contain unique in-range channels"
+            )
+        shuffled = counts.copy()
+        shuffled[subset] = counts[subset][rng.permutation(subset.size)]
+        return shuffled
     raise ValueError(
         "spike ablation mode must be none, zero, random, or shuffled"
     )

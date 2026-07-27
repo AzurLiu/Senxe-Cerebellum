@@ -1,32 +1,48 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "protocols": [
     {
-      "protocol_id": "senxe_contact_skill_v1",
+      "protocol_id": "senxe_contact_skill_v2",
       "evidence_level": "project_design",
       "source_url": null,
       "claim_boundary": "A proposed CL1-ready multi-axis contact-skill protocol. Simulator results do not establish biological learning.",
       "artifact_wait_ms": 50.0,
       "collect_window_ms": 50.0,
-      "encoder_policy": "Fixed compact alignment, force and external-phase encoder throughout comparison phases.",
-      "decoder_policy": "Fixed zero-bias five-output contact-skill count decoder throughout all comparison phases.",
-      "feedback_policy": "Lab-approved structured contact-progress, collision and success stimulation only during feedback_training.",
+      "encoder_policy": "Fixed 18-channel compact alignment, force, three-bit external-phase and contact encoder throughout comparison phases. Magnitude uses bounded amplitude rather than extra electrodes.",
+      "decoder_policy": "Fixed zero-bias five-output count decoder reading only 20 disjoint motor electrodes, with two positive and two negative electrodes per output.",
+      "feedback_policy": "Six disjoint channels deliver cooldown-limited contact-progress, collision and success stimulation only during feedback_training. The remaining 15 stimulatable channels are reserved. The laboratory-approved amplitude, phase width, frequency, burst count, pulse count and absolute-charge envelope is enforced before every SDK call.",
       "controls": [
         "baseline_only",
         "zero_spikes",
         "shuffled_spikes",
-        "no_feedback"
+        "no_feedback",
+        "yoked_feedback"
       ],
       "required_recordings": [
         "raw_samples",
         "detected_spikes",
         "stimulations",
+        "stimulation_budget",
+        "stimulation_safety_limits",
+        "per_episode_stimulation_dose",
+        "stimulation_to_collection_timing",
+        "calibration_health_report",
         "control_actions",
         "force_torque",
         "protocol_phase",
         "physics_scenario",
         "contact_skill_vector",
-        "feedback_event"
+        "feedback_event",
+        "code_hash",
+        "protocol_hash",
+        "channel_map_version",
+        "channel_map_hash",
+        "culture_id",
+        "condition_order",
+        "retention_delay",
+        "episode_success",
+        "time_to_success",
+        "peak_and_p95_force"
       ],
       "phases": [
         {
@@ -34,28 +50,130 @@
           "episodes": 5,
           "encoder_frozen": true,
           "decoder_frozen": true,
-          "biological_feedback_enabled": false
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
         },
         {
           "phase": "frozen_baseline",
-          "episodes": 10,
+          "episodes": 25,
           "encoder_frozen": true,
           "decoder_frozen": true,
-          "biological_feedback_enabled": false
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
         },
         {
           "phase": "feedback_training",
-          "episodes": 40,
+          "episodes": 50,
           "encoder_frozen": true,
           "decoder_frozen": true,
-          "biological_feedback_enabled": true
+          "biological_feedback_enabled": true,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
         },
         {
           "phase": "frozen_evaluation",
           "episodes": 20,
           "encoder_frozen": true,
           "decoder_frozen": true,
-          "biological_feedback_enabled": false
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": true
+        },
+        {
+          "phase": "retention_5_min",
+          "episodes": 20,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 300,
+          "heldout_evaluation": true
+        },
+        {
+          "phase": "retention_15_min",
+          "episodes": 20,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 600,
+          "heldout_evaluation": true
+        },
+        {
+          "phase": "retention_45_min",
+          "episodes": 20,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 1800,
+          "heldout_evaluation": true
+        }
+      ]
+    },
+    {
+      "protocol_id": "senxe_contact_skill_application_v1",
+      "evidence_level": "project_design",
+      "source_url": null,
+      "claim_boundary": "A short CL1-access application and hardware-readiness demonstration. It validates plumbing, safety gates and measurable neural authority but cannot establish retained biological learning.",
+      "artifact_wait_ms": 50.0,
+      "collect_window_ms": 50.0,
+      "encoder_policy": "The same frozen 18-channel contact encoder used by the confirmatory protocol.",
+      "decoder_policy": "The same frozen 20-channel five-output antagonistic decoder used by the confirmatory protocol.",
+      "feedback_policy": "Cooldown-limited structured feedback during ten pilot episodes. Electrical limits and per-episode dose are recorded and enforced centrally.",
+      "controls": [
+        "baseline_only",
+        "shuffled_spikes",
+        "no_feedback"
+      ],
+      "required_recordings": [
+        "calibration_health_report",
+        "stimulation_safety_limits",
+        "per_episode_stimulation_dose",
+        "stimulation_to_collection_timing",
+        "detected_spikes",
+        "control_actions",
+        "force_torque",
+        "official_episode_success",
+        "code_hash",
+        "protocol_hash",
+        "channel_map_hash"
+      ],
+      "phases": [
+        {
+          "phase": "calibration",
+          "episodes": 2,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
+        },
+        {
+          "phase": "frozen_baseline",
+          "episodes": 5,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
+        },
+        {
+          "phase": "feedback_training",
+          "episodes": 10,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": true,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": false
+        },
+        {
+          "phase": "frozen_evaluation",
+          "episodes": 5,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false,
+          "rest_before_seconds": 0,
+          "heldout_evaluation": true
         }
       ]
     },

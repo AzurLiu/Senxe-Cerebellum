@@ -22,6 +22,8 @@ class TaskPhase(str, Enum):
     GRASP = "grasp"
     TRANSPORT = "transport"
     INSERT = "insert"
+    RELEASE = "release"
+    RETREAT = "retreat"
     COMPLETE = "complete"
 
 
@@ -30,13 +32,30 @@ class NominalControlConfig:
     """Configuration for the deterministic task controller."""
 
     action_dim: int = 7
-    position_gain: float = 3.0
-    max_translation_norm: float = 0.25
+    position_gain: float = 6.0
+    insertion_gain: float = 4.0
+    max_translation_norm: float = 0.60
+    max_insertion_norm: float = 0.15
+    hover_height_m: float = 0.08
+    hover_tolerance_m: float = 0.025
+    grasp_z_offset_m: float = -0.03
     grasp_distance_m: float = 0.04
-    grasp_force_n: float = 2.0
-    grasp_hold_steps: int = 8
-    insertion_distance_m: float = 0.06
-    completion_distance_m: float = 0.015
+    grasp_yaw_tolerance_rad: float = 0.12
+    grasp_confirm_steps: int = 10
+    grasp_timeout_steps: int = 60
+    grasp_loss_tolerance_steps: int = 10
+    lift_height_above_table_m: float = 0.15
+    lift_tolerance_m: float = 0.02
+    transport_clearance_m: float = 0.10
+    transport_xy_tolerance_m: float = 0.008
+    transport_z_tolerance_m: float = 0.02
+    yaw_tolerance_rad: float = 0.06
+    yaw_gain: float = 1.5
+    max_yaw_action: float = 0.30
+    yaw_action_index: int = 5
+    release_hold_steps: int = 12
+    retreat_speed: float = 0.25
+    retreat_min_steps: int = 10
     gripper_index: int = -1
 
 
@@ -87,76 +106,312 @@ class NominalTaskController:
         if self.config.action_dim < 3:
             raise ValueError("action_dim must provide at least xyz translation")
         self.phase = TaskPhase.APPROACH_NUT
+        self._approach_stage = "hover"
+        self._transport_stage = "lift"
         self._grasp_steps = 0
+        self._grasp_confirmed_steps = 0
+        self._lost_grasp_steps = 0
+        self._release_steps = 0
+        self._retreat_steps = 0
 
     def reset(self) -> None:
         """Reset externally held task state for a new episode."""
 
         self.phase = TaskPhase.APPROACH_NUT
+        self._approach_stage = "hover"
+        self._transport_stage = "lift"
         self._grasp_steps = 0
+        self._grasp_confirmed_steps = 0
+        self._lost_grasp_steps = 0
+        self._release_steps = 0
+        self._retreat_steps = 0
 
     def propose(self, observation: Mapping[str, Any]) -> np.ndarray:
         """Return a bounded white-box action for the current task phase."""
 
         eef_to_nut = _vector3(observation.get("eef_to_nut"))
-        peg_to_hole = _vector3(observation.get("peg_to_hole"))
-        force_n = float(np.linalg.norm(_vector3(observation.get("force"))))
-        nut_distance = float(np.linalg.norm(eef_to_nut))
-        insertion_distance = float(np.linalg.norm(peg_to_hole))
+        nut_to_peg = _vector3(
+            observation.get("nut_to_peg", observation.get("peg_to_hole"))
+        )
+        grasp_confirmed = bool(observation.get("grasp_confirmed", False))
+        nut_on_peg = bool(observation.get("nut_on_peg", False))
+        placement_success = bool(observation.get("placement_success", False))
+        yaw_error_rad = float(observation.get(
+            "nut_peg_yaw_error_rad",
+            0.0,
+        ))
+        grasp_yaw_error_rad = float(observation.get(
+            "grasp_yaw_error_rad",
+            0.0,
+        ))
+        nut_height = float(observation.get(
+            "nut_height_above_table_m",
+            self.config.lift_height_above_table_m,
+        ))
 
-        self._update_phase(nut_distance, insertion_distance, force_n)
-
-        if self.phase is TaskPhase.APPROACH_NUT:
-            target = eef_to_nut
-            gripper = -1.0
-        elif self.phase is TaskPhase.GRASP:
-            target = np.zeros(3, dtype=float)
-            gripper = 1.0
-        elif self.phase in (TaskPhase.TRANSPORT, TaskPhase.INSERT):
-            target = peg_to_hole
-            gripper = 1.0
-        else:
-            target = np.zeros(3, dtype=float)
-            gripper = 1.0
+        target, gripper, gain, max_norm, yaw_action = self._phase_command(
+            eef_to_nut=eef_to_nut,
+            nut_to_peg=nut_to_peg,
+            nut_height_above_table_m=nut_height,
+            yaw_error_rad=yaw_error_rad,
+            grasp_yaw_error_rad=grasp_yaw_error_rad,
+            grasp_confirmed=grasp_confirmed,
+            nut_on_peg=nut_on_peg,
+            placement_success=placement_success,
+        )
 
         action = np.zeros(self.config.action_dim, dtype=float)
         action[:3] = _clip_norm(
-            target * self.config.position_gain,
-            self.config.max_translation_norm,
+            target * gain,
+            max_norm,
         )
+        if self.config.action_dim > self.config.yaw_action_index:
+            action[self.config.yaw_action_index] = yaw_action
         gripper_index = self.config.gripper_index % self.config.action_dim
         action[gripper_index] = gripper
         return np.clip(action, -1.0, 1.0)
 
-    def _update_phase(
+    def _phase_command(
         self,
-        nut_distance: float,
-        insertion_distance: float,
-        force_n: float,
-    ) -> None:
+        *,
+        eef_to_nut: np.ndarray,
+        nut_to_peg: np.ndarray,
+        nut_height_above_table_m: float,
+        yaw_error_rad: float,
+        grasp_yaw_error_rad: float,
+        grasp_confirmed: bool,
+        nut_on_peg: bool,
+        placement_success: bool,
+    ) -> tuple[np.ndarray, float, float, float, float]:
+        cfg = self.config
+        zero = np.zeros(3, dtype=float)
+
+        # A nut can settle onto the peg after a contact transient or a lost
+        # grasp. Do not re-grasp an already placed object; release and retreat
+        # so the official environment check can evaluate the placement.
+        if (
+            nut_on_peg
+            and self.phase
+            not in {
+                TaskPhase.RELEASE,
+                TaskPhase.RETREAT,
+                TaskPhase.COMPLETE,
+            }
+        ):
+            self.phase = TaskPhase.RELEASE
+            self._release_steps = 0
+
         if self.phase is TaskPhase.APPROACH_NUT:
-            if nut_distance <= self.config.grasp_distance_m:
+            grasp_yaw_action = float(np.clip(
+                grasp_yaw_error_rad * cfg.yaw_gain,
+                -cfg.max_yaw_action,
+                cfg.max_yaw_action,
+            ))
+            if self._approach_stage == "hover":
+                target = eef_to_nut + np.array(
+                    [0.0, 0.0, cfg.hover_height_m],
+                    dtype=float,
+                )
+                if (
+                    np.linalg.norm(target) <= cfg.hover_tolerance_m
+                    and abs(grasp_yaw_error_rad)
+                    <= cfg.grasp_yaw_tolerance_rad
+                ):
+                    self._approach_stage = "descend"
+            if self._approach_stage == "descend":
+                target = eef_to_nut + np.array(
+                    [0.0, 0.0, cfg.grasp_z_offset_m],
+                    dtype=float,
+                )
+            if (
+                self._approach_stage == "descend"
+                and np.linalg.norm(target) <= cfg.grasp_distance_m
+            ):
                 self.phase = TaskPhase.GRASP
                 self._grasp_steps = 0
-            return
+                self._grasp_confirmed_steps = 0
+                return (
+                    zero,
+                    1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    grasp_yaw_action,
+                )
+            return (
+                target,
+                -1.0,
+                cfg.position_gain,
+                cfg.max_translation_norm,
+                grasp_yaw_action,
+            )
 
         if self.phase is TaskPhase.GRASP:
             self._grasp_steps += 1
-            if (
-                force_n >= self.config.grasp_force_n
-                or self._grasp_steps >= self.config.grasp_hold_steps
-            ):
+            self._grasp_confirmed_steps = (
+                self._grasp_confirmed_steps + 1
+                if grasp_confirmed
+                else 0
+            )
+            if self._grasp_confirmed_steps >= cfg.grasp_confirm_steps:
                 self.phase = TaskPhase.TRANSPORT
-            return
+                self._transport_stage = "lift"
+                self._lost_grasp_steps = 0
+            elif self._grasp_steps >= cfg.grasp_timeout_steps:
+                # Never infer a grasp from elapsed time or wrist force. Re-open
+                # and retry the approach if object contacts were not confirmed.
+                self._retry_grasp()
+                return (
+                    zero,
+                    -1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    0.0,
+                )
+            else:
+                return (
+                    zero,
+                    1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    0.0,
+                )
 
         if self.phase is TaskPhase.TRANSPORT:
-            if insertion_distance <= self.config.insertion_distance_m:
+            if self._grasp_was_lost(grasp_confirmed, nut_on_peg):
+                self._retry_grasp()
+                return (
+                    zero,
+                    -1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    0.0,
+                )
+
+            if self._transport_stage == "lift":
+                height_error = (
+                    cfg.lift_height_above_table_m
+                    - nut_height_above_table_m
+                )
+                if height_error <= cfg.lift_tolerance_m:
+                    self._transport_stage = "align"
+                else:
+                    return (
+                        np.array([0.0, 0.0, height_error], dtype=float),
+                        1.0,
+                        cfg.position_gain,
+                        cfg.max_translation_norm,
+                        0.0,
+                    )
+
+            target = nut_to_peg + np.array(
+                [0.0, 0.0, cfg.transport_clearance_m],
+                dtype=float,
+            )
+            yaw_action = float(np.clip(
+                -yaw_error_rad * cfg.yaw_gain,
+                -cfg.max_yaw_action,
+                cfg.max_yaw_action,
+            ))
+            if (
+                np.linalg.norm(nut_to_peg[:2])
+                <= cfg.transport_xy_tolerance_m
+                and abs(target[2]) <= cfg.transport_z_tolerance_m
+                and abs(yaw_error_rad) <= cfg.yaw_tolerance_rad
+            ):
                 self.phase = TaskPhase.INSERT
-            return
+            else:
+                return (
+                    target,
+                    1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    yaw_action,
+                )
 
         if self.phase is TaskPhase.INSERT:
-            if insertion_distance <= self.config.completion_distance_m:
+            if nut_on_peg:
+                self.phase = TaskPhase.RELEASE
+                self._release_steps = 0
+            elif self._grasp_was_lost(grasp_confirmed, nut_on_peg):
+                self._retry_grasp()
+                return (
+                    zero,
+                    -1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    0.0,
+                )
+            else:
+                yaw_action = float(np.clip(
+                    -yaw_error_rad * cfg.yaw_gain,
+                    -cfg.max_yaw_action,
+                    cfg.max_yaw_action,
+                ))
+                return (
+                    nut_to_peg,
+                    1.0,
+                    cfg.insertion_gain,
+                    cfg.max_insertion_norm,
+                    yaw_action,
+                )
+
+        if self.phase is TaskPhase.RELEASE:
+            self._release_steps += 1
+            if self._release_steps >= cfg.release_hold_steps:
+                self.phase = TaskPhase.RETREAT
+                self._retreat_steps = 0
+            return (
+                zero,
+                -1.0,
+                cfg.position_gain,
+                cfg.max_translation_norm,
+                0.0,
+            )
+
+        if self.phase is TaskPhase.RETREAT:
+            self._retreat_steps += 1
+            if (
+                self._retreat_steps >= cfg.retreat_min_steps
+                and placement_success
+            ):
                 self.phase = TaskPhase.COMPLETE
+                return (
+                    zero,
+                    -1.0,
+                    cfg.position_gain,
+                    cfg.max_translation_norm,
+                    0.0,
+                )
+            return (
+                np.array([0.0, 0.0, cfg.retreat_speed], dtype=float),
+                -1.0,
+                1.0,
+                cfg.retreat_speed,
+                0.0,
+            )
+
+        return zero, -1.0, cfg.position_gain, cfg.max_translation_norm, 0.0
+
+    def _grasp_was_lost(
+        self,
+        grasp_confirmed: bool,
+        nut_on_peg: bool,
+    ) -> bool:
+        if grasp_confirmed or nut_on_peg:
+            self._lost_grasp_steps = 0
+        else:
+            self._lost_grasp_steps += 1
+        return self._lost_grasp_steps >= self.config.grasp_loss_tolerance_steps
+
+    def _retry_grasp(self) -> None:
+        self.phase = TaskPhase.APPROACH_NUT
+        self._approach_stage = "hover"
+        self._transport_stage = "lift"
+        self._grasp_steps = 0
+        self._grasp_confirmed_steps = 0
+        self._lost_grasp_steps = 0
+        self._release_steps = 0
+        self._retreat_steps = 0
 
 
 class BoundedResidualController:

@@ -12,11 +12,10 @@ import csv
 
 try:
     import matplotlib.pyplot as plt
-    import numpy as np
 except ImportError:
-    print("FATAL ERROR: matplotlib or numpy is not installed.")
-    print("This script is an optional analysis tool and requires matplotlib.")
-    print("Please run: pip install matplotlib numpy")
+    print("FATAL ERROR: matplotlib is not installed.")
+    print("This script is an optional analysis tool.")
+    print("Please run: pip install matplotlib")
     sys.exit(1)
 
 def moving_average(data, window_size=20):
@@ -57,7 +56,12 @@ def main():
             
             data[cond]["eps"].append(ep)
             data[cond]["reward"].append(float(row["Reward"]))
-            data[cond]["sr"].append(float(row["SuccessRate"]))
+            episode_success = row.get("EpisodeSuccess")
+            if episode_success not in (None, ""):
+                success_percent = 100.0 * float(episode_success)
+            else:
+                success_percent = float(row["SuccessRate"])
+            data[cond]["sr"].append(success_percent)
             data[cond]["fsr"].append(float(row["ForceSafeRate"]))
             data[cond]["residual"].append(float(
                 row.get("MeanResidualNorm", 0.0)
@@ -106,6 +110,7 @@ def main():
         "zero_spikes": "#e74c3c",     # Red
         "shuffled_spikes": "#f39c12", # Orange
         "no_feedback": "#9b59b6",     # Purple
+        "yoked_feedback": "#16a085",  # Teal
     }
 
     for cond, metrics in data.items():

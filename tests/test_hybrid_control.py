@@ -18,11 +18,23 @@ def _observation(
     eef_to_nut=(0.1, 0.0, 0.0),
     peg_to_hole=(0.2, 0.0, 0.0),
     force=(0.0, 0.0, 0.0),
+    grasp_confirmed=False,
+    nut_on_peg=False,
+    placement_success=False,
+    nut_height_above_table_m=0.15,
+    grasp_yaw_error_rad=0.0,
+    nut_peg_yaw_error_rad=0.0,
 ):
     return {
         "eef_to_nut": np.asarray(eef_to_nut, dtype=float),
         "peg_to_hole": np.asarray(peg_to_hole, dtype=float),
         "force": np.asarray(force, dtype=float),
+        "grasp_confirmed": grasp_confirmed,
+        "nut_on_peg": nut_on_peg,
+        "placement_success": placement_success,
+        "nut_height_above_table_m": nut_height_above_table_m,
+        "grasp_yaw_error_rad": grasp_yaw_error_rad,
+        "nut_peg_yaw_error_rad": nut_peg_yaw_error_rad,
     }
 
 
@@ -35,24 +47,76 @@ def test_nominal_controller_approaches_nut_with_open_gripper():
     assert action.shape == (7,)
     assert action[0] > 0.0
     assert action[-1] == -1.0
-    assert np.linalg.norm(action[:3]) <= 0.25 + 1e-9
+    assert np.linalg.norm(action[:3]) <= 0.60 + 1e-9
 
 
 def test_nominal_controller_keeps_long_horizon_phase_outside_cl_path():
-    controller = NominalTaskController(NominalControlConfig(grasp_hold_steps=2))
+    controller = NominalTaskController(NominalControlConfig(
+        grasp_confirm_steps=1,
+    ))
 
-    grasp_action = controller.propose(_observation(eef_to_nut=(0.01, 0.0, 0.0)))
+    controller.propose(_observation(eef_to_nut=(0.0, 0.0, -0.08)))
+    grasp_action = controller.propose(_observation(
+        eef_to_nut=(0.0, 0.0, 0.03),
+    ))
     assert controller.phase is TaskPhase.GRASP
     assert grasp_action[-1] == 1.0
 
-    controller.propose(_observation(eef_to_nut=(0.01, 0.0, 0.0)))
     transport_action = controller.propose(_observation(
-        eef_to_nut=(0.01, 0.0, 0.0),
-        peg_to_hole=(0.2, 0.0, 0.0),
+        eef_to_nut=(0.0, 0.0, 0.03),
+        peg_to_hole=(0.2, 0.0, -0.1),
+        grasp_confirmed=True,
     ))
     assert controller.phase is TaskPhase.TRANSPORT
     assert transport_action[0] > 0.0
     assert transport_action[-1] == 1.0
+
+
+def test_nominal_controller_never_infers_grasp_from_elapsed_steps():
+    controller = NominalTaskController(NominalControlConfig(
+        grasp_timeout_steps=2,
+    ))
+    controller.propose(_observation(eef_to_nut=(0.0, 0.0, -0.08)))
+    close = _observation(eef_to_nut=(0.0, 0.0, 0.03))
+
+    controller.propose(close)
+    assert controller.phase is TaskPhase.GRASP
+    controller.propose(close)
+    controller.propose(close)
+
+    assert controller.phase is TaskPhase.APPROACH_NUT
+
+
+def test_nominal_controller_requires_release_and_retreat_before_complete():
+    controller = NominalTaskController(NominalControlConfig(
+        release_hold_steps=2,
+        retreat_min_steps=2,
+    ))
+
+    release = controller.propose(_observation(
+        nut_on_peg=True,
+        placement_success=True,
+    ))
+    assert controller.phase is TaskPhase.RELEASE
+    assert release[-1] == -1.0
+
+    controller.propose(_observation(
+        nut_on_peg=True,
+        placement_success=True,
+    ))
+    assert controller.phase is TaskPhase.RETREAT
+
+    retreat = controller.propose(_observation(
+        nut_on_peg=True,
+        placement_success=True,
+    ))
+    assert controller.phase is TaskPhase.RETREAT
+    assert retreat[2] > 0.0
+    controller.propose(_observation(
+        nut_on_peg=True,
+        placement_success=True,
+    ))
+    assert controller.phase is TaskPhase.COMPLETE
 
 
 def test_residual_controller_only_changes_configured_axis():

@@ -1,3 +1,5 @@
+import numpy as np
+
 from core.session_recording import CLSessionRecorder, SessionRecordingConfig
 
 
@@ -45,7 +47,12 @@ def test_session_recorder_synchronizes_json_telemetry():
     )
 
     recorder.start()
-    recorder.append({"step": 2, "phase": "frozen"})
+    recorder.append({
+        "step": 2,
+        "phase": "frozen",
+        "force_safe": np.bool_(True),
+        "force": np.asarray([1.0, 2.0]),
+    })
     recorder.stop()
 
     assert neurons.record_kwargs["include_spikes"]
@@ -53,5 +60,9 @@ def test_session_recorder_synchronizes_json_telemetry():
     assert not neurons.record_kwargs["include_raw_samples"]
     assert neurons.recording.stopped
     assert neurons.stream.points == [
-        (123, '{"phase":"frozen","step":2}')
+        (
+            123,
+            '{"force":[1.0,2.0],"force_safe":true,'
+            '"phase":"frozen","step":2}',
+        )
     ]

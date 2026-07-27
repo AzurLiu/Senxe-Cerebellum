@@ -15,6 +15,12 @@ task phase into sparse stimulation. Biological firing is decoded into a bounded
 contact skill while planning, rotation, gripper intent, joint control and hard
 safety remain deterministic.
 
+> [!IMPORTANT]
+> The audited application currently couples CL1 to a **RoboSuite Panda
+> simulation**. It does not contain a ROS / libfranka physical-arm driver,
+> hardware watchdog, or certified emergency-stop integration and must not be
+> represented as physical-robot-ready.
+
 <p align="center">
   <img src="assets/hud_preview.png" alt="Senxe Cerebellum Live Telemetry HUD Overlay" width="720">
   <br>
@@ -35,8 +41,23 @@ The default [contact-skill module](core/contact_skill.py) encodes only:
 * three-axis contact force;
 * externally maintained task phase and contact severity.
 
-It uses at most one signed/magnitude channel per axis plus phase/contact flags.
+Each position and force axis uses a positive/negative electrode pair, while
+magnitude is carried by bounded pulse amplitude rather than extra small/large
+electrodes. Seven phases use the non-zero patterns of three phase electrodes.
 The older high-dimensional VIE encoder remains available only in legacy modes.
+
+The confirmatory path uses a fixed, hardware-valid allocation:
+
+| Role | Channels | Purpose |
+|---|---:|---|
+| sensory stimulation | 18 | signed XYZ position/force, phase, contact |
+| motor readout | 20 | five outputs, two positive and two negative each |
+| structured feedback | 6 | three positive and three negative |
+| reserve | 15 | failed-channel replacement under a preregistered rule |
+
+CL1 channels `0`, `4`, `7`, `56`, and `63` are never stimulated. Sensory,
+motor, feedback, and reserve regions are pairwise disjoint. The exact mapping
+and its SHA-256 are stored with every evidence run.
 
 ### 2. Five-Output Contact Skill
 Motor outputs use the transparent antagonistic count decoder
@@ -46,8 +67,10 @@ Motor outputs use the transparent antagonistic count decoder
 [delta_x, delta_y, delta_z, soften, retract]
 ```
 
-*   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations:
+*   **Opposing Populations**: Each output has a fixed four-electrode readout
+    containing two positive and two negative channels:
     $$\text{Action}[i] = \frac{\text{flexor} - \text{extensor}}{\text{flexor} + \text{extensor} + \epsilon}$$
+    Sensory, feedback, and reserve spikes are ignored by the motor decoder.
 *   **Safety semantics**: `soften` can only reduce movement authority.
     `retract` selects a deterministic force-opposing retreat primitive.
 
@@ -126,11 +149,15 @@ Run the primary training script:
 ```bash
 python senxe_demo_robosuite.py
 ```
-The default mode is the bounded five-output contact skill:
+The default is the 22-episode CL1 access-application profile and the bounded
+five-output contact skill:
 ```bash
 export SENXE_CONTROL_MODE=contact_skill
 export SENXE_GENERALIZATION=1
 ```
+This primary path does not construct the legacy VIE, PDI, Curiosity, legacy
+decoder, or single-axis residual controller. The application profile validates
+software plumbing and safety evidence; it does not claim biological learning.
 The default neural input path consumes SDK-detected spikes with their original
 CL frame timestamps. It observes a post-stimulation artifact interval before
 collecting decoder features:
@@ -150,29 +177,59 @@ stimulations, and the synchronized `senxe_control` data stream:
 export SENXE_RECORD_SESSION=1
 export SENXE_RECORDING_LOCATION=recordings
 ```
-The previous single-axis and direct decoder paths are retained only as explicit
-comparisons:
-```bash
-export SENXE_CONTROL_MODE=hybrid_residual
-```
-or:
-```bash
-export SENXE_CONTROL_MODE=legacy_wetware
-```
-This script runs the 7-DoF Franka Panda robot arm task, trains the biological agent, and saves a Cyberpunk-styled video overlay `cl1_nutassembly.mp4` displaying the MEA grid, force telemetry, and live status watermarks.
+The audited RoboSuite agent now accepts only `contact_skill`. Historical
+direct-decoder demonstrations remain isolated in `senxe_demo.py` and are not
+part of the CL1 application or confirmatory evidence path.
+This script runs the 7-DoF Franka Panda on the single-object
+`NutAssemblySquare` task and saves a Cyberpunk-styled video overlay
+`cl1_nutassembly.mp4`. Episode success is binary and comes only from
+RoboSuite's official placement check; the older end-effector-distance
+heuristic has been removed.
 
 The current CL1-ready protocol and its evidence boundaries are documented in
-[docs/CL1_PROTOCOL_V1.md](docs/CL1_PROTOCOL_V1.md). Simulator results validate
+[docs/CL1_PROTOCOL_V2.md](docs/CL1_PROTOCOL_V2.md). Simulator results validate
 software timing and causal controls only; they are not biological-learning
 evidence.
 
 ### 4. Run the Ablation Study
-To run the automated information-nullification benchmark:
+To run a simulator-only full software benchmark:
 ```bash
 python run_ablation_benchmark.py
+python analyze_ablations.py ablation_results.csv
 python plot_ablations.py
 ```
-This will run headless control trials and save a learning curve comparison to `ablation_plot.png`.
+Real CL1 defaults to one condition per independent culture invocation:
+```bash
+export SENXE_LAB_APPROVED_STIM=1
+export SENXE_MAX_STIM_AMPLITUDE_UA=1.5
+export SENXE_MAX_STIM_PHASE_WIDTH_US=200
+export SENXE_MAX_STIM_BURST_HZ=300
+export SENXE_MAX_STIM_BURST_COUNT=15
+export SENXE_MAX_STIM_CALLS=<lab-approved-limit>
+export SENXE_MAX_STIM_CHANNEL_PULSES=<lab-approved-limit>
+export SENXE_MAX_STIM_ABS_CHARGE_NC=<lab-approved-limit>
+export SENXE_RECORD_SESSION=1
+export SENXE_BENCHMARK_PROTOCOL_ID=senxe_contact_skill_v2
+python run_ablation_benchmark.py \
+  --condition contact_skill \
+  --culture-id culture_001 \
+  --sequence-index 0
+```
+For the yoked control, provide a donor schedule exported by an independent
+`contact_skill` run:
+```bash
+python run_ablation_benchmark.py \
+  --condition yoked_feedback \
+  --culture-id culture_002 \
+  --sequence-index 1 \
+  --yoked-feedback feedback_schedules/culture_001_seq0_contact_skill.json
+```
+The preregistered endpoints, retention requirements, biological replicate
+rules, and falsification criteria are defined in
+[docs/PREREGISTRATION_V2.md](docs/PREREGISTRATION_V2.md).
+The shorter access-application boundary and its fail-closed hardware gates are
+defined in
+[docs/CL1_APPLICATION_PROTOCOL.md](docs/CL1_APPLICATION_PROTOCOL.md).
 
 ---
 

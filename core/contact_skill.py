@@ -18,6 +18,10 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from core.channel_map import (
+    DEFAULT_CONTACT_CHANNEL_MAP,
+    STIMULATABLE_CHANNELS,
+)
 from core.hybrid_control import TaskPhase
 from core.neurons import BurstDesign, ChannelSet, StimDesign
 
@@ -39,20 +43,44 @@ class ContactEncoderConfig:
     contact_soft_n: float = 1.0
     contact_hard_n: float = 12.0
     max_stim_amplitude: float = 1.5
-    position_channels: tuple[int, ...] = tuple(range(0, 12))
-    force_channels: tuple[int, ...] = tuple(range(12, 24))
-    phase_channels: tuple[int, ...] = tuple(range(24, 29))
-    contact_channels: tuple[int, ...] = (29, 30, 31)
+    position_channels: tuple[int, ...] = (
+        DEFAULT_CONTACT_CHANNEL_MAP.position_channels
+    )
+    force_channels: tuple[int, ...] = (
+        DEFAULT_CONTACT_CHANNEL_MAP.force_channels
+    )
+    phase_channels: tuple[int, ...] = (
+        DEFAULT_CONTACT_CHANNEL_MAP.phase_channels
+    )
+    contact_channels: tuple[int, ...] = (
+        DEFAULT_CONTACT_CHANNEL_MAP.contact_channels
+    )
 
     def __post_init__(self) -> None:
-        if len(self.position_channels) != 12:
-            raise ValueError("position_channels must contain 12 channels")
-        if len(self.force_channels) != 12:
-            raise ValueError("force_channels must contain 12 channels")
-        if len(self.phase_channels) != len(TaskPhase):
-            raise ValueError("phase_channels must contain one channel per phase")
+        if self.max_stim_amplitude <= 0:
+            raise ValueError("max_stim_amplitude must be positive")
+        if len(self.position_channels) != 6:
+            raise ValueError("position_channels must contain six channels")
+        if len(self.force_channels) != 6:
+            raise ValueError("force_channels must contain six channels")
+        if len(self.phase_channels) != 3:
+            raise ValueError("phase_channels must contain three code channels")
         if len(self.contact_channels) != 3:
             raise ValueError("contact_channels must contain three channels")
+        sensory_channels = (
+            self.position_channels
+            + self.force_channels
+            + self.phase_channels
+            + self.contact_channels
+        )
+        if len(sensory_channels) != len(set(sensory_channels)):
+            raise ValueError("sensory channel groups must be disjoint")
+        invalid = set(sensory_channels) - set(STIMULATABLE_CHANNELS)
+        if invalid:
+            raise ValueError(
+                "sensory channel groups contain non-stimulatable channels: "
+                f"{sorted(invalid)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -89,18 +117,26 @@ class ContactStateEncoder:
         self,
         observation: Mapping[str, Any],
         phase: TaskPhase | str,
+        *,
+        stimulation_enabled: bool = True,
     ) -> ContactEncodingReport:
-        position_error = _vector3(observation.get("peg_to_hole"))
+        # During the CL-enabled transport / insertion phases, the physically
+        # meaningful error is the nut pose relative to the peg. The historical
+        # ``peg_to_hole`` name is retained only as a compatibility fallback.
+        position_error = _vector3(
+            observation.get("nut_to_peg", observation.get("peg_to_hole"))
+        )
         force = _vector3(observation.get("force"))
         phase_value = phase.value if isinstance(phase, TaskPhase) else str(phase)
         stimulated: list[int] = []
 
         for axis in range(3):
-            position_channel = _signed_bin_channel(
+            position_channel = _signed_axis_channel(
                 position_error[axis],
                 deadband=self.config.position_deadband_m,
-                large_threshold=self.config.position_large_m,
-                channels=self.config.position_channels[axis * 4:(axis + 1) * 4],
+                channels=self.config.position_channels[
+                    axis * 2:(axis + 1) * 2
+                ],
             )
             if position_channel is not None:
                 magnitude = abs(float(position_error[axis]))
@@ -109,14 +145,20 @@ class ContactStateEncoder:
                     0.25,
                     self.config.max_stim_amplitude,
                 )
-                self._stim(position_channel, float(amplitude), burst_hz=100)
-                stimulated.append(position_channel)
+                if stimulation_enabled:
+                    self._stim(
+                        position_channel,
+                        float(amplitude),
+                        burst_hz=100,
+                    )
+                    stimulated.append(position_channel)
 
-            force_channel = _signed_bin_channel(
+            force_channel = _signed_axis_channel(
                 force[axis],
                 deadband=self.config.force_deadband_n,
-                large_threshold=self.config.force_large_n,
-                channels=self.config.force_channels[axis * 4:(axis + 1) * 4],
+                channels=self.config.force_channels[
+                    axis * 2:(axis + 1) * 2
+                ],
             )
             if force_channel is not None:
                 magnitude = abs(float(force[axis]))
@@ -125,8 +167,13 @@ class ContactStateEncoder:
                     0.25,
                     self.config.max_stim_amplitude,
                 )
-                self._stim(force_channel, float(amplitude), burst_hz=140)
-                stimulated.append(force_channel)
+                if stimulation_enabled:
+                    self._stim(
+                        force_channel,
+                        float(amplitude),
+                        burst_hz=140,
+                    )
+                    stimulated.append(force_channel)
 
         phase_members = list(TaskPhase)
         try:
@@ -135,9 +182,17 @@ class ContactStateEncoder:
             )
         except ValueError:
             phase_index = 0
-        phase_channel = self.config.phase_channels[phase_index]
-        self._stim(phase_channel, 0.4, burst_hz=80)
-        stimulated.append(phase_channel)
+        # Seven phases fit into the seven non-zero patterns of three channels.
+        phase_code = phase_index + 1
+        phase_pattern = tuple(
+            channel
+            for bit, channel in enumerate(self.config.phase_channels)
+            if phase_code & (1 << bit)
+        )
+        if stimulation_enabled:
+            for phase_channel in phase_pattern:
+                self._stim(phase_channel, 0.4, burst_hz=80)
+                stimulated.append(phase_channel)
 
         force_magnitude = float(np.linalg.norm(force))
         if force_magnitude < self.config.contact_soft_n:
@@ -150,8 +205,9 @@ class ContactStateEncoder:
             contact_index = 2
             contact_state = "high_force"
         contact_channel = self.config.contact_channels[contact_index]
-        self._stim(contact_channel, 0.5, burst_hz=100)
-        stimulated.append(contact_channel)
+        if stimulation_enabled:
+            self._stim(contact_channel, 0.5, burst_hz=100)
+            stimulated.append(contact_channel)
 
         normalized = np.concatenate([
             np.clip(
@@ -177,6 +233,10 @@ class ContactStateEncoder:
         return report
 
     def _stim(self, channel: int, amplitude: float, *, burst_hz: int) -> None:
+        amplitude = float(min(
+            abs(amplitude),
+            self.config.max_stim_amplitude,
+        ))
         design = StimDesign(160, -amplitude, 160, amplitude)
         self.neurons.stim(
             ChannelSet(int(channel)),
@@ -196,7 +256,7 @@ class ContactSkillControlConfig:
     retract_threshold: float = 0.55
     retract_speed: float = 0.08
     retract_min_force_n: float = 1.0
-    max_translation_norm: float = 0.30
+    max_translation_norm: float = 0.60
     force_soft_limit_n: float = 20.0
     force_hard_limit_n: float = 25.0
     enabled_phases: tuple[str, ...] = (
@@ -374,6 +434,11 @@ class ContactFeedbackConfig:
     progress_strength: float = 0.45
     regress_strength: float = 0.55
     collision_strength: float = 1.0
+    cooldown_steps: int = 3
+
+    def __post_init__(self) -> None:
+        if self.cooldown_steps < 0:
+            raise ValueError("cooldown_steps must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -391,6 +456,16 @@ class ContactFeedbackEvent:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ContactFeedbackEvent":
+        return cls(
+            kind=str(value["kind"]),
+            valence=int(value["valence"]),
+            strength=float(value["strength"]),
+            distance_delta_m=float(value["distance_delta_m"]),
+            force_n=float(value["force_n"]),
+        )
+
 
 class ContactFeedbackEvaluator:
     """Convert physical contact outcomes into fixed, auditable events."""
@@ -401,11 +476,15 @@ class ContactFeedbackEvaluator:
     ) -> None:
         self.config = config or ContactFeedbackConfig()
         self.previous_distance: float | None = None
+        self.step_index = -1
+        self.last_active_step: int | None = None
 
     def reset(self, initial_distance_m: float | None = None) -> None:
         self.previous_distance = (
             None if initial_distance_m is None else float(initial_distance_m)
         )
+        self.step_index = -1
+        self.last_active_step = None
 
     def evaluate(
         self,
@@ -415,6 +494,7 @@ class ContactFeedbackEvaluator:
         success: bool,
         enabled: bool = True,
     ) -> ContactFeedbackEvent:
+        self.step_index += 1
         current = float(distance_m)
         previous = self.previous_distance
         delta = 0.0 if previous is None else previous - current
@@ -422,40 +502,58 @@ class ContactFeedbackEvaluator:
         cfg = self.config
 
         if not enabled:
-            return ContactFeedbackEvent(
+            candidate = ContactFeedbackEvent(
                 "outside_contact_phase",
                 0,
                 0.0,
                 delta,
                 float(force_n),
             )
-        if success:
-            return ContactFeedbackEvent(
+        elif success:
+            candidate = ContactFeedbackEvent(
                 "success", 1, cfg.success_strength, delta, float(force_n)
             )
-        if force_n >= cfg.high_force_n:
-            return ContactFeedbackEvent(
+        elif force_n >= cfg.high_force_n:
+            candidate = ContactFeedbackEvent(
                 "collision", -1, cfg.collision_strength, delta, float(force_n)
             )
-        if delta >= cfg.progress_epsilon_m:
-            return ContactFeedbackEvent(
+        elif delta >= cfg.progress_epsilon_m:
+            candidate = ContactFeedbackEvent(
                 "contact_progress", 1, cfg.progress_strength, delta, float(force_n)
             )
-        if delta <= -cfg.regress_epsilon_m:
-            return ContactFeedbackEvent(
+        elif delta <= -cfg.regress_epsilon_m:
+            candidate = ContactFeedbackEvent(
                 "regress", -1, cfg.regress_strength, delta, float(force_n)
             )
-        if force_n >= cfg.stalled_force_n:
-            return ContactFeedbackEvent(
+        elif force_n >= cfg.stalled_force_n:
+            candidate = ContactFeedbackEvent(
                 "stalled_under_force",
                 -1,
                 cfg.regress_strength,
                 delta,
                 float(force_n),
             )
-        return ContactFeedbackEvent(
-            "neutral", 0, 0.0, delta, float(force_n)
-        )
+        else:
+            candidate = ContactFeedbackEvent(
+                "neutral", 0, 0.0, delta, float(force_n)
+            )
+
+        if not candidate.active:
+            return candidate
+        if (
+            candidate.kind != "success"
+            and self.last_active_step is not None
+            and self.step_index - self.last_active_step < cfg.cooldown_steps
+        ):
+            return ContactFeedbackEvent(
+                f"cooldown_suppressed_{candidate.kind}",
+                0,
+                0.0,
+                delta,
+                float(force_n),
+            )
+        self.last_active_step = self.step_index
+        return candidate
 
 
 class ContactFeedbackStimulator:
@@ -465,21 +563,38 @@ class ContactFeedbackStimulator:
         self,
         neurons: Any,
         *,
-        positive_channels: Sequence[int] = (56, 57, 58, 59),
-        negative_channels: Sequence[int] = (60, 61, 62, 63),
+        positive_channels: Sequence[int] = (
+            DEFAULT_CONTACT_CHANNEL_MAP.positive_feedback_channels
+        ),
+        negative_channels: Sequence[int] = (
+            DEFAULT_CONTACT_CHANNEL_MAP.negative_feedback_channels
+        ),
         max_amplitude: float = 1.5,
     ) -> None:
         self.neurons = neurons
         self.positive_channels = tuple(int(ch) for ch in positive_channels)
         self.negative_channels = tuple(int(ch) for ch in negative_channels)
         self.max_amplitude = float(max_amplitude)
+        if self.max_amplitude <= 0:
+            raise ValueError("max_amplitude must be positive")
+        all_channels = self.positive_channels + self.negative_channels
+        if not self.positive_channels or not self.negative_channels:
+            raise ValueError("feedback requires positive and negative channels")
+        if len(all_channels) != len(set(all_channels)):
+            raise ValueError("feedback channel groups must be disjoint")
+        invalid = set(all_channels) - set(STIMULATABLE_CHANNELS)
+        if invalid:
+            raise ValueError(
+                "feedback contains non-stimulatable channels: "
+                f"{sorted(invalid)}"
+            )
 
-    def emit(self, event: ContactFeedbackEvent) -> None:
+    def emit(self, event: ContactFeedbackEvent) -> bool:
         if not event.active:
-            return
+            return False
         amplitude = float(np.clip(
             0.35 + event.strength,
-            0.35,
+            min(0.35, self.max_amplitude),
             self.max_amplitude,
         ))
         if event.valence > 0:
@@ -490,6 +605,7 @@ class ContactFeedbackStimulator:
             burst = BurstDesign(5, 180)
         design = StimDesign(160, -amplitude, 160, amplitude)
         self.neurons.stim(ChannelSet(*channels), design, burst)
+        return True
 
 
 def summarize_contact_reports(
@@ -544,20 +660,17 @@ def summarize_contact_reports(
     }
 
 
-def _signed_bin_channel(
+def _signed_axis_channel(
     value: float,
     *,
     deadband: float,
-    large_threshold: float,
     channels: Sequence[int],
 ) -> int | None:
+    if len(channels) != 2:
+        raise ValueError("signed axis encoding requires two channels")
     if abs(float(value)) <= deadband:
         return None
-    large = abs(float(value)) >= large_threshold
-    if value > 0:
-        index = 1 if large else 0
-    else:
-        index = 3 if large else 2
+    index = 0 if value > 0 else 1
     return int(channels[index])
 
 

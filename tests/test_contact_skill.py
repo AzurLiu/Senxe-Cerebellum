@@ -1,10 +1,16 @@
-from types import SimpleNamespace
-
 import numpy as np
+import pytest
 
+from core.channel_map import (
+    DEFAULT_CONTACT_CHANNEL_MAP,
+    NON_STIMULATABLE_CHANNELS,
+)
 from core.contact_skill import (
     CONTACT_SKILL_DIM,
+    ContactEncoderConfig,
+    ContactFeedbackConfig,
     ContactFeedbackEvaluator,
+    ContactFeedbackStimulator,
     ContactSkillControlConfig,
     ContactSkillController,
     ContactStateEncoder,
@@ -28,6 +34,7 @@ def test_contact_encoder_uses_compact_position_force_and_phase_channels():
     report = encoder.encode(
         {
             "peg_to_hole": np.array([0.01, -0.03, 0.0]),
+            "nut_to_peg": np.array([-0.02, 0.01, 0.0]),
             "force": np.array([2.0, 0.0, -7.0]),
         },
         TaskPhase.INSERT,
@@ -38,7 +45,66 @@ def test_contact_encoder_uses_compact_position_force_and_phase_channels():
     assert len(report.normalized_features) == 6
     assert len(report.stimulated_channels) == 6
     assert len(neurons.stims) == 6
-    assert all(0 <= channel < 32 for channel in report.stimulated_channels)
+    assert set(report.stimulated_channels) <= set(
+        DEFAULT_CONTACT_CHANNEL_MAP.sensory_channels
+    )
+    assert not (
+        set(report.stimulated_channels) & NON_STIMULATABLE_CHANNELS
+    )
+    assert report.position_error_m == [-0.02, 0.01, 0.0]
+
+
+def test_three_phase_channels_encode_all_seven_phases_uniquely():
+    neurons = _FakeNeurons()
+    encoder = ContactStateEncoder(neurons)
+    patterns = []
+
+    for phase in TaskPhase:
+        report = encoder.encode(
+            {
+                "nut_to_peg": np.zeros(3),
+                "force": np.zeros(3),
+            },
+            phase,
+        )
+        patterns.append(tuple(
+            channel
+            for channel in report.stimulated_channels
+            if channel in DEFAULT_CONTACT_CHANNEL_MAP.phase_channels
+        ))
+
+    assert len(set(patterns)) == len(TaskPhase)
+    assert all(pattern for pattern in patterns)
+
+
+def test_contact_stimulation_configs_reject_forbidden_channels():
+    with pytest.raises(ValueError, match="non-stimulatable"):
+        ContactEncoderConfig(
+            position_channels=(0, 9, 10, 17, 18, 25),
+        )
+    with pytest.raises(ValueError, match="non-stimulatable"):
+        ContactFeedbackStimulator(
+            _FakeNeurons(),
+            positive_channels=(19, 20, 56),
+        )
+
+
+def test_contact_encoder_can_compute_without_delivering_sensory_stimulation():
+    neurons = _FakeNeurons()
+    encoder = ContactStateEncoder(neurons)
+
+    report = encoder.encode(
+        {
+            "nut_to_peg": np.array([0.01, 0.0, -0.02]),
+            "force": np.array([1.0, 0.0, 0.0]),
+        },
+        TaskPhase.TRANSPORT,
+        stimulation_enabled=False,
+    )
+
+    assert report.stimulated_channels == []
+    assert neurons.stims == []
+    assert report.position_error_m == [0.01, 0.0, -0.02]
 
 
 def test_contact_skill_applies_bounded_xyz_residual():
@@ -121,7 +187,9 @@ def test_contact_skill_is_disabled_outside_contact_phases():
 
 
 def test_contact_feedback_distinguishes_progress_collision_and_neutral():
-    evaluator = ContactFeedbackEvaluator()
+    evaluator = ContactFeedbackEvaluator(ContactFeedbackConfig(
+        cooldown_steps=0,
+    ))
     evaluator.reset(0.10)
 
     progress = evaluator.evaluate(
@@ -143,6 +211,39 @@ def test_contact_feedback_distinguishes_progress_collision_and_neutral():
     assert progress.kind == "contact_progress" and progress.valence == 1
     assert collision.kind == "collision" and collision.valence == -1
     assert neutral.kind == "neutral" and neutral.valence == 0
+
+
+def test_contact_feedback_cooldown_suppresses_dense_repeated_events():
+    evaluator = ContactFeedbackEvaluator(ContactFeedbackConfig(
+        cooldown_steps=3,
+    ))
+    evaluator.reset(0.10)
+
+    first = evaluator.evaluate(
+        distance_m=0.09,
+        force_n=2.0,
+        success=False,
+    )
+    second = evaluator.evaluate(
+        distance_m=0.08,
+        force_n=2.0,
+        success=False,
+    )
+    evaluator.evaluate(
+        distance_m=0.08,
+        force_n=0.0,
+        success=False,
+    )
+    fourth = evaluator.evaluate(
+        distance_m=0.07,
+        force_n=2.0,
+        success=False,
+    )
+
+    assert first.active
+    assert second.kind == "cooldown_suppressed_contact_progress"
+    assert not second.active
+    assert fourth.active
 
 
 def test_contact_feedback_is_neutral_outside_contact_phase():

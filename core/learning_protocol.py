@@ -28,6 +28,9 @@ class LearningPhase(str, Enum):
     FROZEN_BASELINE = "frozen_baseline"
     FEEDBACK_TRAINING = "feedback_training"
     FROZEN_EVALUATION = "frozen_evaluation"
+    RETENTION_5_MIN = "retention_5_min"
+    RETENTION_15_MIN = "retention_15_min"
+    RETENTION_45_MIN = "retention_45_min"
 
 
 @dataclass(frozen=True)
@@ -37,12 +40,17 @@ class PhaseSpec:
     encoder_frozen: bool
     decoder_frozen: bool
     biological_feedback_enabled: bool
+    rest_before_seconds: float = 0.0
+    heldout_evaluation: bool = False
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PhaseSpec":
         episodes = int(value["episodes"])
         if episodes <= 0:
             raise ValueError("phase episodes must be positive")
+        rest_before_seconds = float(value.get("rest_before_seconds", 0.0))
+        if rest_before_seconds < 0:
+            raise ValueError("rest_before_seconds must be non-negative")
         return cls(
             phase=LearningPhase(value["phase"]),
             episodes=episodes,
@@ -51,7 +59,20 @@ class PhaseSpec:
             biological_feedback_enabled=bool(
                 value["biological_feedback_enabled"]
             ),
+            rest_before_seconds=rest_before_seconds,
+            heldout_evaluation=bool(
+                value.get("heldout_evaluation", False)
+            ),
         )
+
+    @property
+    def is_evaluation(self) -> bool:
+        return self.phase in {
+            LearningPhase.FROZEN_EVALUATION,
+            LearningPhase.RETENTION_5_MIN,
+            LearningPhase.RETENTION_15_MIN,
+            LearningPhase.RETENTION_45_MIN,
+        }
 
 
 @dataclass(frozen=True)
@@ -109,6 +130,18 @@ class ProtocolSpec:
             if episode_index < cursor:
                 return phase
         return self.phases[-1]
+
+    @property
+    def total_episodes(self) -> int:
+        return sum(phase.episodes for phase in self.phases)
+
+    def phase_start_episode(self, target: LearningPhase) -> int:
+        cursor = 0
+        for phase in self.phases:
+            if phase.phase is target:
+                return cursor
+            cursor += phase.episodes
+        raise KeyError(f"phase is not present in protocol: {target.value}")
 
 
 def load_protocols(path: str | Path) -> dict[str, ProtocolSpec]:

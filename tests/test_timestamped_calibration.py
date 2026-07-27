@@ -2,6 +2,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from core.channel_map import (
+    NON_STIMULATABLE_CHANNELS,
+    STIMULATABLE_CHANNELS,
+)
 from core.neurons import timestamped_warmup_calibration
 
 
@@ -16,7 +20,10 @@ class _FakeTimestampedNeurons:
 
     def stim(self, channels, design, burst):
         self.probe_index += 1
-        self.active_output = self.probe_index % 64
+        selected = np.flatnonzero(
+            np.asarray(channels._channels, dtype=bool)
+        )
+        self.active_output = int(selected[0])
 
     def loop(self, **kwargs):
         ticks = []
@@ -49,4 +56,7 @@ def test_timestamped_calibration_ranks_sdk_detected_spike_responses():
     assert ranking.shape == (64,)
     assert responsiveness.shape == (64,)
     assert np.isfinite(responsiveness).all()
-    assert np.all(responsiveness > 0)
+    assert np.all(responsiveness[list(STIMULATABLE_CHANNELS)] > 0)
+    assert np.all(
+        responsiveness[list(NON_STIMULATABLE_CHANNELS)] == 0
+    )

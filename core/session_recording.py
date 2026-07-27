@@ -28,7 +28,10 @@ class CLSessionRecorder:
     ) -> None:
         self.neurons = neurons
         self.config = config or SessionRecordingConfig()
-        self.attributes = dict(attributes or {})
+        self.attributes = {
+            str(key): _attribute_value(value)
+            for key, value in dict(attributes or {}).items()
+        }
         self.recording: Any | None = None
         self.control_stream: Any | None = None
 
@@ -59,6 +62,7 @@ class CLSessionRecorder:
         timestamp = int(self.neurons.timestamp())
         serialized = json.dumps(
             dict(payload),
+            default=_json_default,
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -83,3 +87,30 @@ class CLSessionRecorder:
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         self.stop()
+
+
+def _json_default(value: Any) -> Any:
+    """Convert NumPy-style telemetry values without hiding unsupported data."""
+
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    item = getattr(value, "item", None)
+    if callable(item):
+        return item()
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
+    )
+
+
+def _attribute_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(
+        value,
+        default=_json_default,
+        sort_keys=True,
+        separators=(",", ":"),
+    )

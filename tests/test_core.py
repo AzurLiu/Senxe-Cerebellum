@@ -7,7 +7,6 @@ Run:  pytest tests/test_core.py -v
 """
 
 import numpy as np
-import pytest
 
 from core.decoder import AntagonisticDecoder
 from core.pdi import PDI
