@@ -1,16 +1,22 @@
 """
 Senxe Cerebellum — Core Modules
 =============================
-Shared biological neural interface components for v3.0 and v4.0 demos.
+Shared biological neural interface components.
 
 Modules:
-    decoder   — Antagonistic motor decoding (flexor/extensor differential)
-    hybrid_control — White-box nominal control with bounded CL1 residuals
-    pdi       — Physical Disturbance Index (FEP-inspired explore/exploit gate)
-    curiosity — Neural intrinsic curiosity (firing-pattern novelty detection)
-    video     — Video generation utilities
+    contact_skill — Default compact encoder and five-output skill boundary
+    contact_scenarios — Train/held-out MuJoCo physics perturbations
+    spike_pipeline — Timestamped, artifact-separated CL spike features
+    hybrid_control — Nominal task planner and legacy one-axis residual
 """
 
+from core.contact_skill import (
+    CONTACT_SKILL_DIM,
+    ContactFeedbackEvaluator,
+    ContactSkillController,
+    ContactStateEncoder,
+    summarize_contact_reports,
+)
 from core.decoder import AntagonisticDecoder
 from core.hybrid_control import (
     BoundedResidualController,
@@ -22,10 +28,12 @@ from core.hybrid_control import (
     spike_confidence,
     summarize_control_reports,
 )
-from core.pdi import PDI
-from core.curiosity import NeuralCuriosity
-
 __all__ = [
+    "CONTACT_SKILL_DIM",
+    "ContactFeedbackEvaluator",
+    "ContactSkillController",
+    "ContactStateEncoder",
+    "summarize_contact_reports",
     "AntagonisticDecoder",
     "BoundedResidualController",
     "HybridControlReport",
@@ -35,6 +43,4 @@ __all__ = [
     "TaskPhase",
     "spike_confidence",
     "summarize_control_reports",
-    "PDI",
-    "NeuralCuriosity",
 ]

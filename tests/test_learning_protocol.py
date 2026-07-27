@@ -8,7 +8,7 @@ from core.learning_protocol import (
 
 def test_default_protocol_is_evidence_bounded_and_frozen_for_evaluation():
     protocols = load_protocols(default_protocol_path())
-    protocol = protocols["senxe_force_residual_v1"]
+    protocol = protocols["senxe_contact_skill_v1"]
 
     assert protocol.evidence_level is EvidenceLevel.PROJECT_DESIGN
     assert "do not establish biological learning" in protocol.claim_boundary
@@ -24,7 +24,7 @@ def test_default_protocol_is_evidence_bounded_and_frozen_for_evaluation():
 
 def test_protocol_phase_boundaries_are_external_and_deterministic():
     protocol = load_protocols(default_protocol_path())[
-        "senxe_force_residual_v1"
+        "senxe_contact_skill_v1"
     ]
 
     assert protocol.phase_for_episode(0).phase is LearningPhase.CALIBRATION
@@ -33,4 +33,3 @@ def test_protocol_phase_boundaries_are_external_and_deterministic():
     assert protocol.phase_for_episode(15).phase is LearningPhase.FEEDBACK_TRAINING
     assert protocol.phase_for_episode(55).phase is LearningPhase.FROZEN_EVALUATION
     assert protocol.phase_for_episode(500).phase is LearningPhase.FROZEN_EVALUATION
-

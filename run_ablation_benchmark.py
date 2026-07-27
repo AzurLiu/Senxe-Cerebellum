@@ -6,28 +6,29 @@ Runs headless simulations of various ablation modes to measure
 the true information content of the biological (or simulated) spikes.
 
 Conditions:
-1. none (Control): Real spikes + Real stim
+1. contact_skill: Real spikes + structured feedback
 2. baseline_only: No spike residual + No feedback stim
 3. zero_spikes: Decoder receives [] + Real feedback stim
-4. random_spikes: Decoder receives random channels + Real feedback stim
+4. shuffled_spikes: Per-window counts are channel-shuffled
 5. no_feedback: Real spikes + No reward/penalty feedback stim
 """
 
 import csv
+import os
 import numpy as np
 from tqdm import tqdm
 
 from senxe_demo_robosuite import make_robosuite_env, CL1Agent
-from core.neurons import cl_open, warmup_calibration
+from core.neurons import cl_open, timestamped_warmup_calibration
 
 SEED = 42
-EPISODES_PER_CONDITION = 50
+EPISODES_PER_CONDITION = int(os.getenv("SENXE_ABLATION_EPISODES", "75"))
 
 CONDITIONS = [
-    {"name": "none (Control)", "spike_mode": "none", "stim_mode": "full"},
+    {"name": "contact_skill", "spike_mode": "none", "stim_mode": "full"},
     {"name": "baseline_only", "spike_mode": "zero", "stim_mode": "none"},
     {"name": "zero_spikes", "spike_mode": "zero", "stim_mode": "full"},
-    {"name": "random_spikes", "spike_mode": "random", "stim_mode": "full"},
+    {"name": "shuffled_spikes", "spike_mode": "shuffled", "stim_mode": "full"},
     {"name": "no_feedback", "spike_mode": "none", "stim_mode": "none"},
 ]
 
@@ -40,7 +41,10 @@ def main():
     # Open neurons (or simulator)
     with cl_open() as neurons:
         # Phase 0: Calibration
-        ranking, resp = warmup_calibration(neurons, duration_sec=5.0)
+        ranking, resp = timestamped_warmup_calibration(
+            neurons,
+            duration_sec=5.0,
+        )
 
         # Create headless environment
         env, raw_env = make_robosuite_env(render=False)
@@ -76,12 +80,25 @@ def main():
                     ep,
                     name,
                     agent.current_protocol_phase.phase.value,
+                    (
+                        "none"
+                        if agent.active_scenario is None
+                        else agent.active_scenario.scenario_id
+                    ),
+                    (
+                        "none"
+                        if agent.active_scenario is None
+                        else agent.active_scenario.split
+                    ),
                     reward,
                     sr,
                     fsr,
                     control_summary["residual_applied_rate"],
                     control_summary["mean_abs_applied_residual"],
                     control_summary["hard_stop_count"],
+                    control_summary.get("mean_residual_norm", 0.0),
+                    control_summary.get("mean_compliance_scale", 1.0),
+                    control_summary.get("retract_count", 0),
                 ])
 
                 pbar.set_postfix(R=f"{reward:.1f}", SR=f"{sr:.0f}%", FSR=f"{fsr:.0f}%")
@@ -96,12 +113,17 @@ def main():
             "Episode",
             "Condition",
             "ProtocolPhase",
+            "Scenario",
+            "ScenarioSplit",
             "Reward",
             "SuccessRate",
             "ForceSafeRate",
             "ResidualAppliedRate",
             "MeanAbsAppliedResidual",
             "HardStopCount",
+            "MeanResidualNorm",
+            "MeanComplianceScale",
+            "RetractCount",
         ])
         writer.writerows(results_log)
     

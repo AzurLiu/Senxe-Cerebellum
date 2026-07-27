@@ -113,3 +113,64 @@ def warmup_calibration(
           f"range: {responsiveness[top8[0]]:.1f}~{responsiveness[top8[-1]]:.1f}")
     return channel_ranking, responsiveness
 
+
+def timestamped_warmup_calibration(
+    neurons,
+    duration_sec: float = 10.0,
+    *,
+    artifact_wait_ms: float = 50.0,
+    collect_window_ms: float = 50.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Rank output electrodes using SDK-detected, timestamped spikes.
+
+    Baseline and evoked responses use the same artifact-separated collection
+    window as the control experiment.  This replaces raw-voltage amplitude as
+    the default hardware calibration metric.
+    """
+
+    from core.spike_pipeline import SpikeWindowConfig, SpikeWindowReader
+
+    print("  [Calibration] Timestamped spike responsiveness calibration...")
+    reader = SpikeWindowReader(
+        neurons,
+        SpikeWindowConfig(
+            artifact_wait_ms=artifact_wait_ms,
+            collect_window_ms=collect_window_ms,
+            bin_width_ms=10.0,
+            tick_ms=10.0,
+        ),
+    )
+    baseline_window_count = max(3, int(max(duration_sec, 0.1) * 5))
+    baseline_counts = np.zeros(64, dtype=np.float64)
+    for _ in range(baseline_window_count):
+        window = reader.read()
+        baseline_counts += np.asarray(
+            window.features.channel_counts,
+            dtype=np.float64,
+        )
+    baseline_counts /= baseline_window_count
+
+    probe = StimDesign(160, -0.75, 160, 0.75)
+    evoked_counts = np.zeros(64, dtype=np.float64)
+    for input_channel in range(64):
+        neurons.stim(
+            ChannelSet(input_channel),
+            probe,
+            BurstDesign(1, 50),
+        )
+        window = reader.read()
+        evoked_counts += np.asarray(
+            window.features.channel_counts,
+            dtype=np.float64,
+        )
+    evoked_counts /= 64.0
+
+    responsiveness = evoked_counts - baseline_counts
+    channel_ranking = np.argsort(responsiveness)[::-1]
+    top8 = channel_ranking[:8]
+    print(
+        f"  [Calibration] Done! Top-8: {top8.tolist()} "
+        f"spike delta: {responsiveness[top8[0]]:.3f}"
+        f"~{responsiveness[top8[-1]]:.3f}"
+    )
+    return channel_ranking, responsiveness

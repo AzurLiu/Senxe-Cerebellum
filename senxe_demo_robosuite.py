@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Senxe Cerebellum v4.0 — RoboSuite NutAssembly (Native Force/Torque Sensors)
+Senxe Cerebellum v5.0 — RoboSuite Contact-Skill NutAssembly
 =========================================================================
-CL1 Bio-Computer — Pure Wetware Interface
+CL1 Bio-Computer — Bounded Multi-Axis Contact Skill
 
 Usage:  python senxe_demo_robosuite.py
 Output: cl1_nutassembly.mp4
@@ -12,7 +12,14 @@ import imageio, cv2
 from tqdm import tqdm
 from collections import deque
 
-from core.neurons import cl_open, warmup_calibration, is_cl_simulator, ChannelSet, StimDesign, BurstDesign
+from core.neurons import (
+    BurstDesign,
+    ChannelSet,
+    StimDesign,
+    cl_open,
+    is_cl_simulator,
+    timestamped_warmup_calibration,
+)
 from core.decoder import AntagonisticDecoder
 from core.hybrid_control import (
     BoundedResidualController,
@@ -22,7 +29,25 @@ from core.hybrid_control import (
     spike_confidence,
     summarize_control_reports,
 )
-from core.learning_protocol import default_protocol_path, load_protocols
+from core.contact_scenarios import (
+    ContactScenarioSchedule,
+    RoboSuiteContactPerturbation,
+    default_contact_scenario_path,
+    load_contact_scenarios,
+)
+from core.contact_skill import (
+    CONTACT_SKILL_DIM,
+    ContactFeedbackEvaluator,
+    ContactFeedbackStimulator,
+    ContactSkillController,
+    ContactStateEncoder,
+    summarize_contact_reports,
+)
+from core.learning_protocol import (
+    LearningPhase,
+    default_protocol_path,
+    load_protocols,
+)
 from core.session_recording import CLSessionRecorder, SessionRecordingConfig
 from core.spike_pipeline import (
     SpikeWindowConfig,
@@ -54,19 +79,20 @@ TORQUE_SAFETY_THRESHOLD   = 5.0
 PREDICTABLE_STIM_TOP_K    = 8
 PREDICTABLE_BURST_N       = 15
 PREDICTABLE_BURST_HZ      = 300
-CONTROL_MODE              = os.getenv("SENXE_CONTROL_MODE", "hybrid_residual").strip().lower()
+CONTROL_MODE              = os.getenv("SENXE_CONTROL_MODE", "contact_skill").strip().lower()
 HYBRID_RESIDUAL_AXIS      = int(os.getenv("SENXE_RESIDUAL_AXIS", "2"))
 HYBRID_RESIDUAL_SCALE     = float(os.getenv("SENXE_RESIDUAL_SCALE", "0.08"))
 HYBRID_MAX_RESIDUAL_ABS   = float(os.getenv("SENXE_MAX_RESIDUAL_ABS", "0.05"))
 HYBRID_MIN_CONFIDENCE     = float(os.getenv("SENXE_MIN_RESIDUAL_CONFIDENCE", "0.15"))
 SPIKE_PIPELINE            = os.getenv("SENXE_SPIKE_PIPELINE", "timestamped").strip().lower()
-PROTOCOL_ID               = os.getenv("SENXE_PROTOCOL_ID", "senxe_force_residual_v1").strip()
+PROTOCOL_ID               = os.getenv("SENXE_PROTOCOL_ID", "senxe_contact_skill_v1").strip()
 ARTIFACT_WAIT_OVERRIDE    = os.getenv("SENXE_ARTIFACT_WAIT_MS")
 COLLECT_WINDOW_OVERRIDE   = os.getenv("SENXE_COLLECT_WINDOW_MS")
 SPIKE_BIN_MS              = float(os.getenv("SENXE_SPIKE_BIN_MS", "10"))
 SPIKE_TICK_MS             = float(os.getenv("SENXE_SPIKE_TICK_MS", "10"))
 RECORD_CL_SESSION         = os.getenv("SENXE_RECORD_SESSION", "0").strip() == "1"
 RECORDING_LOCATION        = os.getenv("SENXE_RECORDING_LOCATION") or None
+GENERALIZATION_ENABLED    = os.getenv("SENXE_GENERALIZATION", "1").strip() == "1"
 
 # ═══ RoboSuite Environment ═══
 def make_robosuite_env(render=False):
@@ -151,9 +177,14 @@ class CL1Agent:
         self.ablation_spike_mode = ablation_spike_mode
         self.ablation_stim_mode = ablation_stim_mode
         self.control_mode = str(control_mode).strip().lower()
-        if self.control_mode not in {"hybrid_residual", "legacy_wetware"}:
+        if self.control_mode not in {
+            "contact_skill",
+            "hybrid_residual",
+            "legacy_wetware",
+        }:
             raise ValueError(
-                "control_mode must be 'hybrid_residual' or 'legacy_wetware'"
+                "control_mode must be contact_skill, hybrid_residual, "
+                "or legacy_wetware"
             )
         self.spike_pipeline = SPIKE_PIPELINE
         if self.spike_pipeline not in {"timestamped", "legacy_voltage"}:
@@ -195,7 +226,7 @@ class CL1Agent:
             SessionRecordingConfig(
                 enabled=RECORD_CL_SESSION,
                 file_location=RECORDING_LOCATION,
-                file_suffix="senxe_hybrid_residual_v1",
+                file_suffix="senxe_contact_skill_v1",
             ),
             attributes={
                 "protocol_id": self.protocol.protocol_id,
@@ -206,9 +237,24 @@ class CL1Agent:
         self.action_dim = env.action_space.shape[0]
         self.vie = VIE(neurons, force_threshold=FORCE_SAFETY_THRESHOLD,
                        depth_threshold=INSERTION_DEPTH_THRESHOLD, raw_env=raw_env)
+        self.contact_encoder = ContactStateEncoder(neurons)
         resp_weights = responsiveness if channel_ranking is not None else None
-        self.decoder = AntagonisticDecoder(self.action_dim, action_scale=ACTION_SCALE,
-                                            channel_weights=resp_weights)
+        self.contact_decoder = AntagonisticDecoder(
+            CONTACT_SKILL_DIM,
+            action_scale=1.0,
+            channel_weights=resp_weights,
+        )
+        self.legacy_decoder = AntagonisticDecoder(
+            self.action_dim,
+            action_scale=ACTION_SCALE,
+            channel_weights=resp_weights,
+        )
+        # Compatibility alias for callers that inspect the selected decoder.
+        self.decoder = (
+            self.contact_decoder
+            if self.control_mode == "contact_skill"
+            else self.legacy_decoder
+        )
         self.nominal_controller = NominalTaskController(NominalControlConfig(
             action_dim=self.action_dim,
         ))
@@ -220,6 +266,16 @@ class CL1Agent:
             force_soft_limit_n=FORCE_SAFETY_THRESHOLD,
             force_hard_limit_n=FORCE_SAFETY_THRESHOLD * 1.25,
         ))
+        self.contact_controller = ContactSkillController()
+        self.contact_feedback = ContactFeedbackEvaluator()
+        self.contact_feedback_stimulator = ContactFeedbackStimulator(neurons)
+        self.last_contact_encoding = None
+        self.last_feedback_event = None
+        self.active_scenario = None
+        self.scenario_schedule = ContactScenarioSchedule(
+            load_contact_scenarios(default_contact_scenario_path())
+        )
+        self.contact_perturbation = RoboSuiteContactPerturbation(raw_env)
         self.pdi = PDI()
         self.curiosity = NeuralCuriosity()
         self.episode_rewards = []
@@ -299,11 +355,36 @@ class CL1Agent:
         self.rng = np.random.default_rng(seed)
         self.current_protocol_phase = self.protocol.phase_for_episode(ep_num)
         obs, _ = self.env.reset(seed=seed)
+        if GENERALIZATION_ENABLED:
+            self.active_scenario = self.scenario_schedule.select(
+                ep_num,
+                frozen_evaluation=(
+                    self.current_protocol_phase.phase
+                    is LearningPhase.FROZEN_EVALUATION
+                ),
+            )
+            self.contact_perturbation.apply(self.active_scenario)
+        else:
+            self.active_scenario = None
         obs_info = extract_obs(obs, raw_env=self.raw_env)
-        self.vie.reset(); self.pdi.reset(); self.decoder.reset(); self.curiosity.reset()
+        self.vie.reset()
+        self.contact_encoder.reset()
+        self.pdi.reset()
+        self.contact_decoder.reset()
+        self.legacy_decoder.reset()
+        self.curiosity.reset()
         self.nominal_controller.reset()
+        self.contact_feedback.reset(
+            float(np.linalg.norm(obs_info["peg_to_hole"]))
+        )
         self.last_control_report = None
-        self.last_episode_control_summary = summarize_control_reports([])
+        self.last_contact_encoding = None
+        self.last_feedback_event = None
+        self.last_episode_control_summary = (
+            summarize_contact_reports([])
+            if self.control_mode == "contact_skill"
+            else summarize_control_reports([])
+        )
         total_reward = 0.0; frames_list = []
         ep_successes = []; ep_force_safe = []
         step_rewards = deque(maxlen=50); cur_fr = np.zeros(64)
@@ -311,7 +392,17 @@ class CL1Agent:
         control_reports = []
 
         for step in range(max_steps):
-            self.vie.encode(obs_info)
+            if self.control_mode == "contact_skill":
+                baseline = self.nominal_controller.propose(obs_info)
+                encoding = self.contact_encoder.encode(
+                    obs_info,
+                    self.nominal_controller.phase,
+                )
+                self.last_contact_encoding = encoding.to_dict()
+            else:
+                baseline = None
+                self.vie.encode(obs_info)
+                self.last_contact_encoding = None
             spikes, cur_fr, spike_counts = self._detect_spikes()
             ep_firing_acc.append(cur_fr.copy())
             if not self.current_protocol_phase.encoder_frozen:
@@ -320,15 +411,28 @@ class CL1Agent:
             self.pdi.update(vel); pdi_val = self.pdi.compute()
             novelty = self.curiosity.compute_novelty(cur_fr)
             fep_boost = pdi_val * 0.3 + novelty * 0.1
-            raw = self.decoder.decode_counts(
-                spike_counts,
-                pdi_boost=(
-                    fep_boost
-                    if self.control_mode == "legacy_wetware"
-                    else 0.0
-                ),
-            )
-            if self.control_mode == "hybrid_residual":
+            if self.control_mode == "contact_skill":
+                raw = self.contact_decoder.decode_counts(
+                    spike_counts,
+                    pdi_boost=0.0,
+                )
+                action, control_report = self.contact_controller.compose(
+                    baseline,
+                    raw,
+                    phase=self.nominal_controller.phase,
+                    residual_confidence=spike_confidence(spikes),
+                    force_vector_n=obs_info["force"],
+                    residual_enabled=(
+                        self.current_protocol_phase.phase
+                        is not LearningPhase.CALIBRATION
+                    ),
+                )
+                self.last_control_report = control_report.to_dict()
+            elif self.control_mode == "hybrid_residual":
+                raw = self.legacy_decoder.decode_counts(
+                    spike_counts,
+                    pdi_boost=0.0,
+                )
                 baseline = self.nominal_controller.propose(obs_info)
                 action, control_report = self.residual_controller.compose(
                     baseline,
@@ -343,6 +447,10 @@ class CL1Agent:
                 )
                 self.last_control_report = control_report.to_dict()
             else:
+                raw = self.legacy_decoder.decode_counts(
+                    spike_counts,
+                    pdi_boost=fep_boost,
+                )
                 action = raw
                 self.last_control_report = {
                     "phase": "legacy",
@@ -357,22 +465,8 @@ class CL1Agent:
                     "reason": "legacy_control_mode",
                 }
             control_reports.append(dict(self.last_control_report))
-            self.session_recorder.append({
-                "episode": ep_num,
-                "step": step,
-                "protocol_phase": self.current_protocol_phase.phase.value,
-                "encoder_frozen": self.current_protocol_phase.encoder_frozen,
-                "decoder_frozen": self.current_protocol_phase.decoder_frozen,
-                "feedback_enabled": (
-                    self.current_protocol_phase.biological_feedback_enabled
-                ),
-                "spike_total": int(np.sum(spike_counts)),
-                "active_channels": spikes,
-                "spike_window": self.last_spike_window,
-                "control": self.last_control_report,
-                "force": np.asarray(obs_info["force"], dtype=float).tolist(),
-                "torque": np.asarray(obs_info["torque"], dtype=float).tolist(),
-            })
+            force_before = np.asarray(obs_info["force"], dtype=float).copy()
+            torque_before = np.asarray(obs_info["torque"], dtype=float).copy()
             obs, reward, terminated, truncated, info = self.env.step(action)
             obs_info = extract_obs(obs, raw_env=self.raw_env)
             total_reward += reward
@@ -395,16 +489,66 @@ class CL1Agent:
             ep_force_safe.append(1 if force_safe else 0)
             step_rewards.append(reward)
 
-            self._predictable_stim_inject(reward)
-            penalty = 0.0
-            if force_mag > FORCE_SAFETY_THRESHOLD:
-                penalty -= (force_mag - FORCE_SAFETY_THRESHOLD) * 0.5
-            if prev_dist is not None and cur_dist > prev_dist + 0.005:
-                penalty -= (cur_dist - prev_dist) * 10.0
-            if reward < -1.0:
-                penalty += reward * 0.3
-            self._unpredictable_stim_inject(penalty)
+            if self.control_mode == "contact_skill":
+                feedback_event = self.contact_feedback.evaluate(
+                    distance_m=cur_dist,
+                    force_n=float(force_mag),
+                    success=bool(success),
+                    enabled=(
+                        self.nominal_controller.phase.value
+                        in self.contact_controller.config.enabled_phases
+                    ),
+                )
+                self.last_feedback_event = feedback_event.to_dict()
+                if (
+                    self.current_protocol_phase.biological_feedback_enabled
+                    and self.ablation_stim_mode != "none"
+                ):
+                    self.contact_feedback_stimulator.emit(feedback_event)
+            else:
+                self._predictable_stim_inject(reward)
+                penalty = 0.0
+                if force_mag > FORCE_SAFETY_THRESHOLD:
+                    penalty -= (force_mag - FORCE_SAFETY_THRESHOLD) * 0.5
+                if prev_dist is not None and cur_dist > prev_dist + 0.005:
+                    penalty -= (cur_dist - prev_dist) * 10.0
+                if reward < -1.0:
+                    penalty += reward * 0.3
+                self._unpredictable_stim_inject(penalty)
+                self.last_feedback_event = None
             prev_dist = cur_dist
+
+            self.session_recorder.append({
+                "episode": ep_num,
+                "step": step,
+                "protocol_phase": self.current_protocol_phase.phase.value,
+                "encoder_frozen": self.current_protocol_phase.encoder_frozen,
+                "decoder_frozen": self.current_protocol_phase.decoder_frozen,
+                "feedback_enabled": (
+                    self.current_protocol_phase.biological_feedback_enabled
+                ),
+                "scenario": (
+                    None
+                    if self.active_scenario is None
+                    else self.active_scenario.to_dict()
+                ),
+                "contact_encoding": self.last_contact_encoding,
+                "feedback_event": self.last_feedback_event,
+                "spike_total": int(np.sum(spike_counts)),
+                "active_channels": spikes,
+                "spike_window": self.last_spike_window,
+                "control": self.last_control_report,
+                "force_before": force_before.tolist(),
+                "torque_before": torque_before.tolist(),
+                "force_after": np.asarray(
+                    obs_info["force"],
+                    dtype=float,
+                ).tolist(),
+                "torque_after": np.asarray(
+                    obs_info["torque"],
+                    dtype=float,
+                ).tolist(),
+            })
 
             if record:
                 try:
@@ -437,7 +581,11 @@ class CL1Agent:
             ep_avg_fr = np.mean(ep_firing_acc, axis=0)
             hud.episode_firing_history.append(ep_avg_fr)
 
-        self.last_episode_control_summary = summarize_control_reports(control_reports)
+        self.last_episode_control_summary = (
+            summarize_contact_reports(control_reports)
+            if self.control_mode == "contact_skill"
+            else summarize_control_reports(control_reports)
+        )
         success_rate = np.mean(ep_successes) * 100 if ep_successes else 0.0
         force_safe_rate = np.mean(ep_force_safe) * 100 if ep_force_safe else 100.0
         return total_reward, self.pdi.compute(), frames_list, success_rate, force_safe_rate
@@ -484,16 +632,29 @@ def main():
     hud.reset()
     print("+" + "=" * 58 + "+")
     if is_cl_simulator():
-        print("|  Senxe Cerebellum v4.0 — cl-sdk Simulator Mode            |")
+        print("|  Senxe Cerebellum v5.0 — cl-sdk Simulator Mode            |")
         print("|  [!] WARNING: Real CL1 hardware not detected.             |")
         print("|      Falling back to official cl-sdk Poisson simulation.  |")
     else:
-        print("|  Senxe Cerebellum v4.0 — Pure Biological Wetware          |")
+        print("|  Senxe Cerebellum v5.0 — Bounded Contact Skill            |")
     print("+" + "=" * 58 + "+\n")
 
     print("-" * 60); print("  Phase 0: Channel Warm-up Calibration"); print("-" * 60)
     with cl_open() as neurons:
-        ranking, resp = warmup_calibration(neurons, WARMUP_SECONDS)
+        ranking, resp = timestamped_warmup_calibration(
+            neurons,
+            WARMUP_SECONDS,
+            artifact_wait_ms=float(
+                ARTIFACT_WAIT_OVERRIDE
+                if ARTIFACT_WAIT_OVERRIDE is not None
+                else 50.0
+            ),
+            collect_window_ms=float(
+                COLLECT_WINDOW_OVERRIDE
+                if COLLECT_WINDOW_OVERRIDE is not None
+                else 50.0
+            ),
+        )
 
         print("-" * 60); print("  Phase 1: Bio-Agent Control Loop"); print("-" * 60)
         env, raw_env = make_robosuite_env(render=True)

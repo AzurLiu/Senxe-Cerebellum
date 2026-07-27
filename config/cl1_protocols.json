@@ -2,15 +2,15 @@
   "schema_version": 1,
   "protocols": [
     {
-      "protocol_id": "senxe_force_residual_v1",
+      "protocol_id": "senxe_contact_skill_v1",
       "evidence_level": "project_design",
       "source_url": null,
-      "claim_boundary": "A proposed CL1-ready protocol. Simulator results do not establish biological learning.",
+      "claim_boundary": "A proposed CL1-ready multi-axis contact-skill protocol. Simulator results do not establish biological learning.",
       "artifact_wait_ms": 50.0,
       "collect_window_ms": 50.0,
-      "encoder_policy": "Fixed sparse task encoder throughout comparison phases.",
-      "decoder_policy": "Fixed zero-bias antagonistic count decoder throughout all comparison phases.",
-      "feedback_policy": "Lab-approved structured positive/negative stimulation only during feedback_training.",
+      "encoder_policy": "Fixed compact alignment, force and external-phase encoder throughout comparison phases.",
+      "decoder_policy": "Fixed zero-bias five-output contact-skill count decoder throughout all comparison phases.",
+      "feedback_policy": "Lab-approved structured contact-progress, collision and success stimulation only during feedback_training.",
       "controls": [
         "baseline_only",
         "zero_spikes",
@@ -23,7 +23,10 @@
         "stimulations",
         "control_actions",
         "force_torque",
-        "protocol_phase"
+        "protocol_phase",
+        "physics_scenario",
+        "contact_skill_vector",
+        "feedback_event"
       ],
       "phases": [
         {
@@ -64,7 +67,7 @@
       "artifact_wait_ms": 50.0,
       "collect_window_ms": 50.0,
       "encoder_policy": "Task observations are encoded before a hardware response window.",
-      "decoder_policy": "A simple zero-bias linear readout is independently reimplemented.",
+      "decoder_policy": "The zero-bias transparent-readout principle motivates Senxe controls; Senxe uses its own antagonistic contact-skill decoder.",
       "feedback_policy": "Task-specific feedback remains separate from motor decoding.",
       "controls": [
         "zero_spikes",

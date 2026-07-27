@@ -1,6 +1,6 @@
 # CL1-Ready Protocol V1
 
-This stage turns the hybrid residual controller into an auditable experiment.
+This stage turns the multi-axis contact-skill controller into an auditable experiment.
 It does not claim that simulated activity is a living culture or that a CL1 has
 learned the robot task.
 
@@ -9,12 +9,12 @@ learned the robot task.
 The default data path is:
 
 ```text
-task-state stimulation
+alignment XYZ + force XYZ + external phase stimulation
 -> 50 ms artifact exclusion
 -> 50 ms timestamped response collection
 -> 10 ms temporal bins + channel counts + first-spike latency
--> fixed zero-bias antagonistic decoder
--> bounded one-axis residual
+-> fixed zero-bias five-output decoder
+-> bounded delta XYZ + safe softening + retract selection
 ```
 
 `core/spike_pipeline.py` consumes the spikes and timestamps already detected by
@@ -28,8 +28,8 @@ claims.
 `config/cl1_protocols.json` is the source of truth for phase boundaries:
 
 1. `calibration`: nominal controller only; encoder and decoder frozen.
-2. `frozen_baseline`: CL residual enabled; structured feedback disabled.
-3. `feedback_training`: CL residual and protocol feedback enabled.
+2. `frozen_baseline`: CL contact skill enabled; structured feedback disabled.
+3. `feedback_training`: CL contact skill and protocol feedback enabled.
 4. `frozen_evaluation`: encoder, decoder and feedback frozen again.
 
 Task phase remains external to CL1 in every phase. Feedback stimulation is
@@ -37,10 +37,26 @@ disabled automatically outside `feedback_training`. Hardware pulse amplitudes
 must be reviewed and approved by the operating lab; the protocol file does not
 claim a universal safe dose.
 
-The hybrid experiment also disables PDI/curiosity Gaussian action perturbation,
-so its residual is a deterministic function of the recorded spike counts and
+The contact experiment disables PDI/curiosity Gaussian action perturbation,
+so its skill is a deterministic function of the recorded spike counts and
 decoder state. The perturbation remains available only in the legacy direct
 control comparison.
+
+CL1 never controls rotation, gripper intent, joint torque, task phase or hard
+safety. `soften` cannot increase nominal movement authority. `retract` selects
+a deterministic force-opposing primitive rather than generating an unchecked
+escape vector.
+
+## Physical generalization
+
+`config/contact_generalization.json` contains disjoint physics:
+
+- training: known peg offsets, yaw angles and friction scales;
+- frozen evaluation: unseen combinations and intermediate/extrapolated values.
+
+The MuJoCo peg body position/orientation and nut collision friction are changed
+after reset. Frozen-evaluation episodes automatically select only held-out
+scenarios. Scenario identity and split are recorded with every control step.
 
 ## Required causal controls
 
@@ -63,8 +79,9 @@ project stream contains:
 - protocol and phase;
 - freeze and feedback flags;
 - real spike timestamps, channel counts, temporal bins and artifact count;
-- nominal/final actions and residual authority;
-- force and torque values.
+- nominal/final actions, XYZ residual, softening and retract decisions;
+- force and torque values before and after the action;
+- physical scenario and structured feedback event.
 
 The recording is the unit of evidence. Video and aggregate reward alone are
 insufficient.
@@ -98,5 +115,5 @@ proposal:
 - DishBrain/Pong supports testing low-dimensional closed-loop structured
   feedback against no-feedback controls. It does not establish transfer to
   mechanical-arm control.
-- Senxe's force-residual protocol is an independent project design awaiting
+- Senxe's contact-skill protocol is an independent project design awaiting
   real CL1 evaluation.

@@ -4,18 +4,21 @@
 > **Original End-to-End Hypothesis Retired**
 > Direct seven-dimensional wetware control is no longer the default research
 > claim. The active development path uses a deterministic nominal controller
-> for task phase and a confidence-gated, one-axis CL1 residual for local contact
-> correction. This hybrid path is a pre-hardware hypothesis, not evidence of
-> biological learning.
+> for task phase and a confidence-gated five-output CL1 contact skill:
+> three-axis translation correction, safe softening, and retract selection.
+> This remains a pre-hardware hypothesis, not evidence of biological learning.
 
 Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
 
-The framework maps multi-modal physical sensor readings (force, torque, kinematics) into closed-loop electrical stimulation patterns and decodes biological firing outputs (spikes) into continuous action trajectories to solve force-sensitive assembly tasks (such as the RoboSuite NutAssembly benchmark).
+The default experiment compresses alignment error, contact force and external
+task phase into sparse stimulation. Biological firing is decoded into a bounded
+contact skill while planning, rotation, gripper intent, joint control and hard
+safety remain deterministic.
 
 <p align="center">
   <img src="assets/hud_preview.png" alt="Senxe Cerebellum Live Telemetry HUD Overlay" width="720">
   <br>
-  <em>Senxe Cerebellum v4.0 Live HUD Telemetry Overlay (RoboSuite NutAssembly task on Franka Panda)</em>
+  <em>Senxe Cerebellum Contact-Skill HUD (RoboSuite NutAssembly task on Franka Panda)</em>
 </p>
 
 > [!NOTE]
@@ -25,24 +28,40 @@ The framework maps multi-modal physical sensor readings (force, torque, kinemati
 
 ## Core Scientific Modules
 
-### 1. Neuromorphic Event-Driven Sparse Coding (VIE)
-The **Virtual Interference Encoding (VIE)** module ([core/vie.py](core/vie.py)) maps continuous environment observations onto the 64-channel microelectrode array (MEA). 
-*   **Sparse Encoding**: To minimize signal crosstalk and cellular overstimulation, sensory modalities (e.g., force/torque deltas) are encoded using delta-tracking. Electrodes are only stimulated when physical quantities change significantly.
-*   **Attention Multiplexing**: Channels are dynamically reallocated between visual/tactile sensory modalities based on the robot's current task phase (searching vs. inserting).
+### 1. Compact Contact Encoding
+The default [contact-skill module](core/contact_skill.py) encodes only:
 
-### 2. Antagonistic Muscle-Pair Decoding
-Motor outputs are decoded based on the biological flexor/extensor antagonistic principle ([core/decoder.py](core/decoder.py)). 
-*   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations (Even/Odd pairs). Each of the 7 action dimensions is driven by the differential activity:
+* three-axis peg alignment error;
+* three-axis contact force;
+* externally maintained task phase and contact severity.
+
+It uses at most one signed/magnitude channel per axis plus phase/contact flags.
+The older high-dimensional VIE encoder remains available only in legacy modes.
+
+### 2. Five-Output Contact Skill
+Motor outputs use the transparent antagonistic count decoder
+([core/decoder.py](core/decoder.py)). Five outputs are decoded:
+
+```text
+[delta_x, delta_y, delta_z, soften, retract]
+```
+
+*   **Opposing Populations**: The 64 channels are interleaved into opposing sub-populations:
     $$\text{Action}[i] = \frac{\text{flexor} - \text{extensor}}{\text{flexor} + \text{extensor} + \epsilon}$$
-*   **EMA Inertia Filter**: Outputs are smoothed using an Exponential Moving Average (EMA) filter to mimic the biomechanical damping and inertia of physical muscle tissue, producing jerk-free trajectories.
+*   **Safety semantics**: `soften` can only reduce movement authority.
+    `retract` selects a deterministic force-opposing retreat primitive.
 
-### 3. FEP-Driven Kinematic Gate (PDI)
-Rather than using hand-tuned exploration schedules, exploration is regulated by the **Physical Disturbance Index (PDI)** ([core/pdi.py](core/pdi.py)). Inspired by the Free Energy Principle (FEP):
-*   **High PDI** (unstable kinematics, high sensory surprise) increases Gaussian perturbation to force exploration and surprise minimization.
-*   **Low PDI** (stable kinematics, low surprise) limits perturbation to exploit the current steady-state control policy.
+### 3. External Planning and Safety
+The deterministic controller owns approach, grasp, transport, rotation,
+gripper intent and hard force limits. CL1 authority is enabled only during
+transport/contact phases and is independently bounded on X, Y and Z.
 
-### 4. Intrinsic Firing-Rate Curiosity
-The **Neural Curiosity** module ([core/curiosity.py](core/curiosity.py)) monitors firing pattern novelty. Novel electrophysiological patterns boost the exploration rate, driving the neural network to escape local minima in silent or repetitive states.
+### 4. Frozen Physical Generalization
+Train scenarios vary peg offset, yaw and nut friction. Frozen evaluation uses a
+disjoint held-out physics set from
+[config/contact_generalization.json](config/contact_generalization.json).
+Zero-spike, shuffled-spike, no-feedback and nominal-only controls use paired
+scenario seeds.
 
 ---
 
@@ -50,58 +69,17 @@ The **Neural Curiosity** module ([core/curiosity.py](core/curiosity.py)) monitor
 
 ```mermaid
 graph TB
-    subgraph Env [RoboSuite Environment]
-        RS[Franka Panda Arm] -->|Tactile Sensory| F["Force (3D) & Torque (3D)"]
-        RS -->|Kinematics| V["EEF Position & Velocity"]
-        RS -->|Spatial Target| T["Peg-to-Hole Target Vector"]
-    end
-
-    subgraph Enc [Virtual Interference Encoding]
-        F -->|Sparse Delta Coding| SDC["Delta Change Filter"]
-        V -->|Attention Multiplexing| AMUX["Task Stage Router"]
-        T -->|Tuning Curves| TC["Spatial Tuning (27 bins)"]
-        SDC & AMUX & TC -->|Homeostatic Gain| Gain["Gain Adaptation (channel_gain)"]
-        Gain -->|Pulse Design| Stim["64-ch MEA Stimulation Design"]
-    end
-
-    subgraph Bio [CL1 Wetware Platform]
-        Stim -->|Electrical Pulse| MEA["64-ch Electrode Array"]
-        MEA -->|Evoke Activity| Neu["Biological Neurons (STDP)"]
-        Neu -->|SDK DetectionResult timestamps| Spikes["Artifact-separated SpikeWindow"]
-    end
-
-    subgraph Dec [Antagonistic Motor Decoder]
-        Spikes -->|Even Channels| Flex["Flexor Population Sum"]
-        Spikes -->|Odd Channels| Ext["Extensor Population Sum"]
-        Flex & Ext -->|Differential Actuation| Diff["(Flex - Ext) / (Flex + Ext)"]
-        Diff -->|Mechanical Inertia| EMA["EMA Smoothing Filter"]
-        EMA -->|Continuous Control| Act["7D Joint Action Output"]
-    end
-
-    subgraph Gate [FEP Active Inference Gate]
-        V -->|Velocity Variance| PDI["Physical Disturbance Index (PDI)"]
-        Spikes -->|Firing Rate Novelty| Cur["Neural Curiosity"]
-        PDI & Cur -->|Exploration Noise| Noise["explore_noise (Gaussian)"]
-    end
-
-    Act -->|env.step| RS
-    Noise -->|Perturbation| Act
-    RS -->|Reward & Collisions| FB["Stimulus Reinforcement"]
-    FB -->|Predictable Stim| MEA
-    FB -->|Unpredictable Noise| MEA
-
-    %% Styles
-    classDef envStyle fill:#0b132b,stroke:#48cae4,stroke-width:2px,color:#fff;
-    classDef encStyle fill:#1c2541,stroke:#00b4d8,stroke-width:2px,color:#fff;
-    classDef bioStyle fill:#102c57,stroke:#ff5757,stroke-width:2px,color:#fff;
-    classDef decStyle fill:#1b4d3e,stroke:#2ecc71,stroke-width:2px,color:#fff;
-    classDef gateStyle fill:#3a0ca3,stroke:#7209b7,stroke-width:2px,color:#fff;
-
-    class RS,F,V,T envStyle;
-    class SDC,AMUX,TC,Gain,Stim encStyle;
-    class MEA,Neu,Spikes bioStyle;
-    class Flex,Ext,Diff,EMA,Act decStyle;
-    class PDI,Cur,Noise,FB gateStyle;
+    Robot["Franka Panda + force sensor"] --> State["Alignment XYZ + force XYZ"]
+    Planner["External task phase + nominal action"] --> Encoder["Compact contact encoder"]
+    State --> Encoder
+    Encoder --> CL1["CL1 / CL SDK"]
+    CL1 --> Window["50 ms artifact wait + 50 ms spike window"]
+    Window --> Skill["delta XYZ + soften + retract"]
+    Skill --> Safety["Confidence, phase and force safety supervisor"]
+    Planner --> Safety
+    Safety --> Robot
+    Robot --> Feedback["Progress / collision / success event"]
+    Feedback --> CL1
 ```
 
 ---
@@ -122,7 +100,7 @@ Since the initial release (`a1057ea` on April 13, 2026), the framework has under
 
 ### 3. Scientific Rigor & Benchmarking
 *   **FEP Terminology Alignment**: Deep-cleaned the codebase to replace reward-centric terminology (like "Dopamine Injection" and "Punishment") with information-theoretic terminology ("Predictable Stimulation" and "Unpredictable Stimulation"), aligning with the Free Energy Principle.
-*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against control groups (no-stim, zero-spikes, and randomized-spikes).
+*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against nominal-only, no-feedback, zero-spike, and count-preserving shuffled-spike controls.
 *   **Fair Baseline Comparison**: Removed hindsight experience replay (HER) reward injection during the PPO evaluation loop to guarantee a scientifically honest comparison between biological and silicon baselines.
 
 ---
@@ -148,13 +126,10 @@ Run the primary training script:
 ```bash
 python senxe_demo_robosuite.py
 ```
-The default control mode is the bounded hybrid path. Its initial authority can
-be configured without changing source:
+The default mode is the bounded five-output contact skill:
 ```bash
-export SENXE_CONTROL_MODE=hybrid_residual
-export SENXE_RESIDUAL_AXIS=2
-export SENXE_RESIDUAL_SCALE=0.08
-export SENXE_MAX_RESIDUAL_ABS=0.05
+export SENXE_CONTROL_MODE=contact_skill
+export SENXE_GENERALIZATION=1
 ```
 The default neural input path consumes SDK-detected spikes with their original
 CL frame timestamps. It observes a post-stimulation artifact interval before
@@ -175,7 +150,12 @@ stimulations, and the synchronized `senxe_control` data stream:
 export SENXE_RECORD_SESSION=1
 export SENXE_RECORDING_LOCATION=recordings
 ```
-The previous direct decoder path is retained only as an explicit comparison:
+The previous single-axis and direct decoder paths are retained only as explicit
+comparisons:
+```bash
+export SENXE_CONTROL_MODE=hybrid_residual
+```
+or:
 ```bash
 export SENXE_CONTROL_MODE=legacy_wetware
 ```

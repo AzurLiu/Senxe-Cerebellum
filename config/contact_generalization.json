@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "scenario_id": "train_center_nominal",
+      "split": "train",
+      "peg_offset_xy_m": [0.0, 0.0],
+      "peg_yaw_deg": 0.0,
+      "friction_scale": 1.0
+    },
+    {
+      "scenario_id": "train_x_pos_2mm",
+      "split": "train",
+      "peg_offset_xy_m": [0.002, 0.0],
+      "peg_yaw_deg": 2.0,
+      "friction_scale": 0.8
+    },
+    {
+      "scenario_id": "train_x_neg_4mm",
+      "split": "train",
+      "peg_offset_xy_m": [-0.004, 0.0],
+      "peg_yaw_deg": -2.0,
+      "friction_scale": 1.2
+    },
+    {
+      "scenario_id": "train_y_pos_6mm",
+      "split": "train",
+      "peg_offset_xy_m": [0.0, 0.006],
+      "peg_yaw_deg": 0.0,
+      "friction_scale": 0.9
+    },
+    {
+      "scenario_id": "train_xy_neg_2mm",
+      "split": "train",
+      "peg_offset_xy_m": [-0.002, -0.002],
+      "peg_yaw_deg": 2.0,
+      "friction_scale": 1.1
+    },
+    {
+      "scenario_id": "heldout_x_pos_3mm",
+      "split": "heldout",
+      "peg_offset_xy_m": [0.003, 0.0],
+      "peg_yaw_deg": 1.0,
+      "friction_scale": 0.7
+    },
+    {
+      "scenario_id": "heldout_y_neg_5mm",
+      "split": "heldout",
+      "peg_offset_xy_m": [0.0, -0.005],
+      "peg_yaw_deg": -3.0,
+      "friction_scale": 1.3
+    },
+    {
+      "scenario_id": "heldout_xy_pos_7mm",
+      "split": "heldout",
+      "peg_offset_xy_m": [0.005, 0.005],
+      "peg_yaw_deg": 3.0,
+      "friction_scale": 0.95
+    },
+    {
+      "scenario_id": "heldout_xy_mixed",
+      "split": "heldout",
+      "peg_offset_xy_m": [-0.003, 0.004],
+      "peg_yaw_deg": -1.0,
+      "friction_scale": 1.15
+    }
+  ]
+}
