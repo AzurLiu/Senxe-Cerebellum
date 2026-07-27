@@ -53,4 +53,4 @@ The ablation CSV records residual application rate, mean absolute residual,
 and hard-stop count in addition to reward and task safety metrics.
 
 These requirements are implemented in the next protocol slice:
-[CL1_PROTOCOL_V2.md](CL1_PROTOCOL_V2.md).
+[CL1_PROTOCOL_V2.md](../../docs/CL1_PROTOCOL_V2.md).

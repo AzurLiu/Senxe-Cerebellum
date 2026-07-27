@@ -419,7 +419,8 @@ class CL1Agent:
         if self.control_mode != "contact_skill":
             raise ValueError(
                 "The audited RoboSuite agent only supports contact_skill. "
-                "Use senxe_demo.py for archived legacy demonstrations."
+                "See legacy/senxe_demo.py for the archived direct-control "
+                "demonstration."
             )
         self.spike_pipeline = SPIKE_PIPELINE
         if self.spike_pipeline not in {"timestamped", "legacy_voltage"}:

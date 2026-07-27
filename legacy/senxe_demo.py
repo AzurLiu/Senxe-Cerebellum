@@ -12,7 +12,7 @@ Demonstrates key biological control components:
   - Channel Warm-up Calibration            — 10-second responsiveness probing
   - Metabolic Guardrail                    — Per-channel health monitoring
 
-Usage:  python senxe_demo.py
+Archived usage:  PYTHONPATH=. python legacy/senxe_demo.py
 Output: cl1_pickandplace.mp4
 """
 
