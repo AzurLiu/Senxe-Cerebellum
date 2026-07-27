@@ -214,6 +214,8 @@ class BudgetedNeurons:
         raw_channel_mask = getattr(channels, "_channels", None)
         raw_burst_count = getattr(burst, "_burst_count", None)
         raw_burst_hz = getattr(burst, "_burst_hz", None)
+        if raw_burst_hz is None:
+            raw_burst_hz = getattr(burst, "_burst_requested_hz", None)
         raw_design_args = getattr(design, "_args", None)
         if (
             raw_channel_mask is None

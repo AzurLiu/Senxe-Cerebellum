@@ -23,12 +23,37 @@ class _FakeNeurons:
         return self.timestamp_value
 
 
-class _FakeBurst:
-    """SDK-shaped burst used to test proxy rejection above SDK limits."""
+class _LegacyBurst:
+    """Burst shape used by CL SDK 0.1.x."""
 
     def __init__(self, burst_count, burst_hz):
         self._burst_count = burst_count
         self._burst_hz = burst_hz
+
+
+class _CurrentBurst:
+    """Burst shape used by CL SDK 1.x."""
+
+    def __init__(self, burst_count, burst_hz):
+        self._burst_count = burst_count
+        self._burst_requested_hz = burst_hz
+
+
+@pytest.mark.parametrize(
+    "burst",
+    [_LegacyBurst(1, 100), _CurrentBurst(1, 100)],
+)
+def test_stimulation_proxy_supports_cl_sdk_burst_field_layouts(burst):
+    raw = _FakeNeurons()
+    neurons = BudgetedNeurons(raw)
+
+    neurons.stim(
+        ChannelSet(1),
+        StimDesign(160, -0.5, 160, 0.5),
+        burst,
+    )
+
+    assert raw.calls == 1
 
 
 def test_stimulation_budget_counts_channel_pulses_and_stops_before_limit():
@@ -85,7 +110,7 @@ def test_stimulation_proxy_rejects_non_stimulatable_cl1_channels(channel):
         ),
         (
             StimDesign(160, -0.5, 160, 0.5),
-            _FakeBurst(1, 201),
+            _CurrentBurst(1, 201),
             "frequency",
         ),
         (
