@@ -1,5 +1,9 @@
 # Senxe Cerebellum: Biologically-Grounded Robotic Motor Control
 
+> [!WARNING]
+> **Project Falsified (Archived)**
+> This project has been falsified by the author. The fundamental task cannot be completed because the conservative memory window of the CL1 system is strictly limited to 20ms, which is insufficient for the temporal dependencies required by this framework.
+
 Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
 
 The framework maps multi-modal physical sensor readings (force, torque, kinematics) into closed-loop electrical stimulation patterns and decodes biological firing outputs (spikes) into continuous action trajectories to solve force-sensitive assembly tasks (such as the RoboSuite NutAssembly benchmark).
