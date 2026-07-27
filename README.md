@@ -203,7 +203,7 @@ Real CL1 defaults to one condition per independent culture invocation:
 export SENXE_LAB_APPROVED_STIM=1
 export SENXE_MAX_STIM_AMPLITUDE_UA=1.5
 export SENXE_MAX_STIM_PHASE_WIDTH_US=200
-export SENXE_MAX_STIM_BURST_HZ=300
+export SENXE_MAX_STIM_BURST_HZ=200
 export SENXE_MAX_STIM_BURST_COUNT=15
 export SENXE_MAX_STIM_CALLS=<lab-approved-limit>
 export SENXE_MAX_STIM_CHANNEL_PULSES=<lab-approved-limit>

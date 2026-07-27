@@ -105,7 +105,7 @@ class StimSafetyLimits:
 
     max_amplitude_ua: float = 1.5
     max_phase_width_us: int = 200
-    max_burst_hz: int = 300
+    max_burst_hz: int = 200
     max_burst_count: int = 15
     max_stim_calls: int = 10_000_000
     max_channel_pulses: int = 100_000_000
@@ -147,7 +147,7 @@ def stimulation_limits_from_env() -> StimSafetyLimits:
         )),
         max_burst_hz=int(os.getenv(
             "SENXE_MAX_STIM_BURST_HZ",
-            "300",
+            "200",
         )),
         max_burst_count=int(os.getenv(
             "SENXE_MAX_STIM_BURST_COUNT",

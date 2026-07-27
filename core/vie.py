@@ -130,7 +130,7 @@ class VIE:
                 ch_idx = self.CH_FORCE[ax * 4 + (0 if df > 0 else 2) + mag_idx]
                 gain = self.channel_gain[ch_idx]
                 inten = self._bounded_amplitude(abs(df) * 0.5 * gain)
-                hz = int(np.clip(50 + abs(df) * 20 * gain, 50, 300))
+                hz = int(np.clip(50 + abs(df) * 20 * gain, 50, 200))
                 fs = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), fs, BurstDesign(2, hz))
 
@@ -142,7 +142,7 @@ class VIE:
                 ch_idx = self.CH_TORQUE[ax * 4 + (0 if dt > 0 else 2) + mag_idx]
                 gain = self.channel_gain[ch_idx]
                 inten = self._bounded_amplitude(abs(dt) * 2.0 * gain)
-                hz = int(np.clip(50 + abs(dt) * 50 * gain, 50, 300))
+                hz = int(np.clip(50 + abs(dt) * 50 * gain, 50, 200))
                 ts = StimDesign(160, -inten, 160, inten)
                 self.neurons.stim(ChannelSet(ch_idx), ts, BurstDesign(2, hz))
 
@@ -170,7 +170,7 @@ class VIE:
             
             # Fire strongly if we are exactly in this bin
             gain = self.channel_gain[ch_idx]
-            hz = int(np.clip((100 + abs(val) * 200) * gain, 50, 350))
+            hz = int(np.clip((100 + abs(val) * 200) * gain, 50, 200))
             inten = self._bounded_amplitude((0.5 + abs(val)) * gain)
             ps = StimDesign(160, -inten, 160, inten)
             self.neurons.stim(ChannelSet(ch_idx), ps, BurstDesign(2, hz))
@@ -197,7 +197,7 @@ class VIE:
                 dn = np.clip(depth / self.depth_threshold, 0.0, 2.0)
                 ch_idx = self.CH_STATE[2]
                 gain = self.channel_gain[ch_idx]
-                dhz = int(np.clip((50 + 300 * dn) * gain, 50, 400))
+                dhz = int(np.clip((50 + 300 * dn) * gain, 50, 200))
                 depth_amplitude = self._bounded_amplitude(0.8 * gain)
                 dstim = StimDesign(
                     160,

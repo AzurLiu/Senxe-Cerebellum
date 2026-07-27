@@ -21,7 +21,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install numpy opencv-python pytest cl-sdk
+        python -m pip install -e . pytest
 
     - name: Run Core Tests
       run: |

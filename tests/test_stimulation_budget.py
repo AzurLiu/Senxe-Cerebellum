@@ -23,6 +23,14 @@ class _FakeNeurons:
         return self.timestamp_value
 
 
+class _FakeBurst:
+    """SDK-shaped burst used to test proxy rejection above SDK limits."""
+
+    def __init__(self, burst_count, burst_hz):
+        self._burst_count = burst_count
+        self._burst_hz = burst_hz
+
+
 def test_stimulation_budget_counts_channel_pulses_and_stops_before_limit():
     raw = _FakeNeurons()
     neurons = BudgetedNeurons(
@@ -77,7 +85,7 @@ def test_stimulation_proxy_rejects_non_stimulatable_cl1_channels(channel):
         ),
         (
             StimDesign(160, -0.5, 160, 0.5),
-            BurstDesign(1, 301),
+            _FakeBurst(1, 201),
             "frequency",
         ),
         (
@@ -103,7 +111,7 @@ def test_stimulation_proxy_rejects_out_of_envelope_designs(
         safety_limits=StimSafetyLimits(
             max_amplitude_ua=1.5,
             max_phase_width_us=200,
-            max_burst_hz=300,
+            max_burst_hz=200,
             max_burst_count=15,
             max_stim_calls=100,
             max_channel_pulses=100,
