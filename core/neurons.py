@@ -58,12 +58,14 @@ def is_cl_simulator() -> bool:
     
     Detection: The official cl-sdk ships as a mock/simulator that replays
     Poisson-sampled recordings. We detect this by checking whether the
-    Neurons class has the mock-only '_replay_file' attribute in its
-    annotations, which only exists in the simulator implementation.
+    Neurons class has a mock-only replay attribute in its annotations.
+    CL SDK 0.1 uses ``_replay_file`` and CL SDK 1.x uses
+    ``_replay_attrs``.
     """
     try:
         from cl.neurons import Neurons
-        return '_replay_file' in getattr(Neurons, '__annotations__', {})
+        annotations = getattr(Neurons, "__annotations__", {})
+        return bool({"_replay_file", "_replay_attrs"} & set(annotations))
     except Exception:
         return False
 

@@ -6,6 +6,7 @@ from core.neurons import (
     ChannelSet,
     StimSafetyLimits,
     StimDesign,
+    is_cl_simulator,
     stimulation_budget_delta,
 )
 
@@ -37,6 +38,10 @@ class _CurrentBurst:
     def __init__(self, burst_count, burst_hz):
         self._burst_count = burst_count
         self._burst_requested_hz = burst_hz
+
+
+def test_installed_cl_sdk_is_recognized_as_simulator():
+    assert is_cl_simulator() is True
 
 
 @pytest.mark.parametrize(
