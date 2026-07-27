@@ -1,7 +1,7 @@
 # CL1-Ready Protocol V1
 
 > Historical design record. The active protocol is
-> [CL1_PROTOCOL_V2.md](CL1_PROTOCOL_V2.md); V1 must not be used for new
+> [CL1_PROTOCOL_V2.md](../../docs/CL1_PROTOCOL_V2.md); V1 must not be used for new
 > biological-learning claims.
 
 This stage turns the multi-axis contact-skill controller into an auditable experiment.

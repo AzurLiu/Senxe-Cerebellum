@@ -1,239 +1,204 @@
-# Senxe Cerebellum: Biologically-Grounded Robotic Motor Control
+# Senxe Cerebellum — Bounded CL1 Contact-Skill Control
 
-> [!WARNING]
-> **Original End-to-End Hypothesis Retired**
-> Direct seven-dimensional wetware control is no longer the default research
-> claim. The active development path uses a deterministic nominal controller
-> for task phase and a confidence-gated five-output CL1 contact skill:
-> three-axis translation correction, safe softening, and retract selection.
-> This remains a pre-hardware hypothesis, not evidence of biological learning.
+[![Unit Tests](https://github.com/AzurLiu/Senxe-Cerebellum/actions/workflows/test.yml/badge.svg)](https://github.com/AzurLiu/Senxe-Cerebellum/actions/workflows/test.yml)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
+Senxe Cerebellum is an open experimental architecture for testing whether
+living neural activity from a Cortical Labs CL1 can learn a small, bounded
+contact-correction skill inside an otherwise deterministic robotic manipulation
+system.
 
-The default experiment compresses alignment error, contact force and external
-task phase into sparse stimulation. Biological firing is decoded into a bounded
-contact skill while planning, rotation, gripper intent, joint control and hard
-safety remain deterministic.
-
-> [!IMPORTANT]
-> The audited application currently couples CL1 to a **RoboSuite Panda
-> simulation**. It does not contain a ROS / libfranka physical-arm driver,
-> hardware watchdog, or certified emergency-stop integration and must not be
-> represented as physical-robot-ready.
-
-<p align="center">
-  <img src="assets/hud_preview.png" alt="Senxe Cerebellum Live Telemetry HUD Overlay" width="720">
-  <br>
-  <em>Senxe Cerebellum Contact-Skill HUD (RoboSuite NutAssembly task on Franka Panda)</em>
-</p>
-
-> [!NOTE]
-> **Hardware Fallback**: This framework is built directly on the official Cortical Labs `cl-sdk`. It automatically detects physical hardware; when a CL1 device is not present, it gracefully falls back to the SDK's official Poisson simulation server, enabling developers and researchers to run the entire pipeline locally.
-
----
-
-## Core Scientific Modules
-
-### 1. Compact Contact Encoding
-The default [contact-skill module](core/contact_skill.py) encodes only:
-
-* three-axis peg alignment error;
-* three-axis contact force;
-* externally maintained task phase and contact severity.
-
-Each position and force axis uses a positive/negative electrode pair, while
-magnitude is carried by bounded pulse amplitude rather than extra small/large
-electrodes. Seven phases use the non-zero patterns of three phase electrodes.
-The older high-dimensional VIE encoder remains available only in legacy modes.
-
-The confirmatory path uses a fixed, hardware-valid allocation:
-
-| Role | Channels | Purpose |
-|---|---:|---|
-| sensory stimulation | 18 | signed XYZ position/force, phase, contact |
-| motor readout | 20 | five outputs, two positive and two negative each |
-| structured feedback | 6 | three positive and three negative |
-| reserve | 15 | failed-channel replacement under a preregistered rule |
-
-CL1 channels `0`, `4`, `7`, `56`, and `63` are never stimulated. Sensory,
-motor, feedback, and reserve regions are pairwise disjoint. The exact mapping
-and its SHA-256 are stored with every evidence run.
-
-### 2. Five-Output Contact Skill
-Motor outputs use the transparent antagonistic count decoder
-([core/decoder.py](core/decoder.py)). Five outputs are decoded:
+The biological component does **not** plan or control the whole robot. It may
+only suggest five transparent outputs:
 
 ```text
-[delta_x, delta_y, delta_z, soften, retract]
+[delta_x, delta_y, delta_z, soften, retract_request]
 ```
 
-*   **Opposing Populations**: Each output has a fixed four-electrode readout
-    containing two positive and two negative channels:
-    $$\text{Action}[i] = \frac{\text{flexor} - \text{extensor}}{\text{flexor} + \text{extensor} + \epsilon}$$
-    Sensory, feedback, and reserve spikes are ignored by the motor decoder.
-*   **Safety semantics**: `soften` can only reduce movement authority.
-    `retract` selects a deterministic force-opposing retreat primitive.
+Planning, grasping, rotation, gripper intent, joint control, success
+verification and hard force safety remain deterministic.
 
-### 3. External Planning and Safety
-The deterministic controller owns approach, grasp, transport, rotation,
-gripper intent and hard force limits. CL1 authority is enabled only during
-transport/contact phases and is independently bounded on X, Y and Z.
+## Current status
 
-### 4. Frozen Physical Generalization
-Train scenarios vary peg offset, yaw and nut friction. Frozen evaluation uses a
-disjoint held-out physics set from
-[config/contact_generalization.json](config/contact_generalization.json).
-Zero-spike, shuffled-spike, no-feedback and nominal-only controls use paired
-scenario seeds.
+| Area | Status |
+|---|---|
+| Primary task | RoboSuite `NutAssemblySquare` with Panda |
+| Biological authority | Bounded five-output contact skill |
+| Channel allocation | Fixed 18 sensory / 20 motor / 6 feedback / 15 reserve |
+| Safety | Fail-closed stimulation and cumulative-dose enforcement |
+| Evidence | Software, simulator and main-loop integration tests |
+| Automated tests | 96 passing locally and in GitHub Actions |
+| CL SDK compatibility | 0.1.x and 1.x simulator metadata |
+| Real CL1 learning | Not yet tested |
+| Physical robot driver | Not implemented |
 
----
+> [!IMPORTANT]
+> Simulator results validate software plumbing, causal controls and safety
+> behavior. They are not evidence that a biological culture has learned, and
+> this repository must not be represented as physical-robot-ready.
 
-## System Architecture
+## Research question
+
+Can a CL1 culture improve and retain a low-dimensional contact skill when:
+
+- task phase and nominal motion are supplied externally;
+- sensory stimulation and motor readout use a fixed channel map;
+- neural authority is independently bounded on X, Y and Z;
+- causal controls can remove spikes, shuffle spikes or remove feedback;
+- evaluation is frozen and separated from feedback training;
+- stimulation dose and every control decision are recorded?
+
+The intended claim is deliberately narrower than end-to-end robot control.
+
+## Architecture
 
 ```mermaid
-graph TB
-    Robot["Franka Panda + force sensor"] --> State["Alignment XYZ + force XYZ"]
-    Planner["External task phase + nominal action"] --> Encoder["Compact contact encoder"]
-    State --> Encoder
-    Encoder --> CL1["CL1 / CL SDK"]
-    CL1 --> Window["50 ms artifact wait + 50 ms spike window"]
-    Window --> Skill["delta XYZ + soften + retract"]
-    Skill --> Safety["Confidence, phase and force safety supervisor"]
-    Planner --> Safety
-    Safety --> Robot
-    Robot --> Feedback["Progress / collision / success event"]
-    Feedback --> CL1
+flowchart LR
+    R["RoboSuite Panda<br/>alignment + contact force"] --> E["Compact encoder<br/>18 sensory channels"]
+    P["Deterministic planner<br/>task phase + nominal action"] --> E
+    E --> C["CL1 / CL SDK"]
+    C --> W["Artifact exclusion<br/>timestamped response window"]
+    W --> D["Fixed antagonistic decoder<br/>20 motor channels"]
+    D --> S["Authority + force supervisor"]
+    P --> S
+    S --> A["Bounded robot action"]
+    A --> R
+    R --> F["Progress / collision / success"]
+    F --> G["Cooldown-limited feedback<br/>6 channels"]
+    G --> C
 ```
 
----
+### Authority boundary
 
-## Major Updates (Compared to April 2026 Release)
+| Function | Owner |
+|---|---|
+| task phase, approach, grasp and transport | deterministic controller |
+| rotation and gripper intent | deterministic controller |
+| joint commands and action clipping | deterministic controller |
+| hard force stop and fallback | deterministic safety supervisor |
+| small XYZ contact correction | bounded CL1 readout |
+| safe movement softening | bounded CL1 readout |
+| retract request | CL1 selects a deterministic retreat primitive |
 
-Since the initial release (`a1057ea` on April 13, 2026), the framework has undergone major refactoring, bug fixing, and scientific alignment:
+Low-confidence or empty neural responses fall back to nominal control.
+`soften` cannot increase movement authority. A retract request cannot generate
+an arbitrary escape vector.
 
-### 1. Critical Control Loop Fixes
-*   **Double Action Scaling Bug**: Resolved an issue where actions were scaled twice in both the Agent loop and the Antagonistic Decoder, which previously caused the robotic arm to stall.
-*   **GymWrapper Flattening Fix**: Bypassed GymWrapper observation flattening inside `extract_obs`. This restores access to structured observation dictionaries (native force, torque, and target vector values) from the MuJoCo simulation.
-*   **Action Bias Normalization**: Replaced an unconditioned, exponentially growing `action_bias` update with a bounded, clipped heuristic to prevent motor command divergence.
+## Hardware-valid channel map
 
-### 2. SDK Integration & Robustness
-*   **Idempotent Context Management**: Fixed a double-close bug in the `cl_open()` context manager that caused `ClosedNodeError` crashes in PyTables on exit. The `Neurons.close()` method is now monkeypatched to be fully idempotent.
-*   **STDP Plasticity Sign Inversion**: Corrected a biological STDP bug in the mock neuron simulator where Pre-before-Post spikes incorrectly triggered long-term depression (LTD) instead of long-term potentiation (LTP).
-*   **NumPy 2.x Compatibility**: Added shims to support running with NumPy 2.x, silencing internal deprecation warnings from the legacy parts of the `cl-sdk`.
+The confirmatory path uses pairwise-disjoint channel regions:
 
-### 3. Scientific Rigor & Benchmarking
-*   **FEP Terminology Alignment**: Deep-cleaned the codebase to replace reward-centric terminology (like "Dopamine Injection" and "Punishment") with information-theoretic terminology ("Predictable Stimulation" and "Unpredictable Stimulation"), aligning with the Free Energy Principle.
-*   **Ablation Benchmark Suite**: Added a dedicated benchmark runner ([run_ablation_benchmark.py](run_ablation_benchmark.py)) and visualization utility ([plot_ablations.py](plot_ablations.py)). It runs paired-seed trials to compare the biological agent against nominal-only, no-feedback, zero-spike, and count-preserving shuffled-spike controls.
-*   **Fair Baseline Comparison**: Removed hindsight experience replay (HER) reward injection during the PPO evaluation loop to guarantee a scientifically honest comparison between biological and silicon baselines.
+| Role | Count | Purpose |
+|---|---:|---|
+| sensory | 18 | signed XYZ alignment/force, phase and contact |
+| motor | 20 | five antagonistic outputs |
+| structured feedback | 6 | progress, collision and success |
+| reserve | 15 | preregistered failed-channel replacement |
 
----
+CL1 channels `0`, `4`, `7`, `56` and `63` are never stimulated. The exact
+mapping and SHA-256 hash are stored with every evidence run.
 
-## Quick Start
+## Safety and evidence
 
-### 1. Installation
-Install the necessary simulator and reinforcement learning baselines:
+Before every SDK stimulation call, the proxy verifies:
+
+- stimulatable channel membership;
+- amplitude and phase width;
+- burst frequency and count;
+- charge balance;
+- cumulative stimulation calls;
+- cumulative channel pulses;
+- cumulative absolute charge.
+
+Real-hardware stimulation is blocked until the operator supplies explicit
+approved limits. Calibration checks both input evoked responses and motor
+readout viability. A failed fixed mapping stops the task unless a
+pre-authorized deterministic reserve remap is enabled.
+
+Each evidence record links:
+
+- raw CL recording and timestamped spikes;
+- stimulation events and delivered dose;
+- nominal and final robot actions;
+- force, task phase and feedback events;
+- protocol, code and channel-map hashes.
+
+## Causal evaluation
+
+The benchmark supports:
+
+- `contact_skill`;
+- `nominal_only`;
+- `zero_spikes`;
+- `shuffled_spikes`;
+- `no_feedback`;
+- `yoked_feedback`.
+
+The confirmatory design requires independent cultures, frozen evaluation,
+held-out simulator physics, delayed retention and preregistered exclusion
+rules. A learning claim must survive these controls; aggregate reward or a
+demonstration video is not sufficient.
+
+## Quick start
+
 ```bash
 git clone https://github.com/AzurLiu/Senxe-Cerebellum.git
 cd Senxe-Cerebellum
-pip install -r requirements.txt
-pip install cl-sdk
+python -m pip install -e .
+pytest -q
 ```
 
-### 2. Configure MuJoCo Backend (macOS)
-```bash
-export MUJOCO_GL=glfw
-```
+Run the audited 22-episode simulator/application path:
 
-### 3. Run the Biological Benchmark
-Run the primary training script:
-```bash
-python senxe_demo_robosuite.py
-```
-The default is the 22-episode CL1 access-application profile and the bounded
-five-output contact skill:
 ```bash
 export SENXE_CONTROL_MODE=contact_skill
 export SENXE_GENERALIZATION=1
-```
-This primary path does not construct the legacy VIE, PDI, Curiosity, legacy
-decoder, or single-axis residual controller. The application profile validates
-software plumbing and safety evidence; it does not claim biological learning.
-The default neural input path consumes SDK-detected spikes with their original
-CL frame timestamps. It observes a post-stimulation artifact interval before
-collecting decoder features:
-```bash
 export SENXE_SPIKE_PIPELINE=timestamped
-export SENXE_ARTIFACT_WAIT_MS=50
-export SENXE_COLLECT_WINDOW_MS=50
-export SENXE_SPIKE_BIN_MS=10
+python senxe_demo_robosuite.py
 ```
-The raw-voltage percentile detector is retained only for explicit compatibility:
-```bash
-export SENXE_SPIKE_PIPELINE=legacy_voltage
-```
-Optional HDF5 session recording includes raw samples, detected spikes,
-stimulations, and the synchronized `senxe_control` data stream:
-```bash
-export SENXE_RECORD_SESSION=1
-export SENXE_RECORDING_LOCATION=recordings
-```
-The audited RoboSuite agent now accepts only `contact_skill`. Historical
-direct-decoder demonstrations remain isolated in `senxe_demo.py` and are not
-part of the CL1 application or confirmatory evidence path.
-This script runs the 7-DoF Franka Panda on the single-object
-`NutAssemblySquare` task and saves a Cyberpunk-styled video overlay
-`cl1_nutassembly.mp4`. Episode success is binary and comes only from
-RoboSuite's official placement check; the older end-effector-distance
-heuristic has been removed.
 
-The current CL1-ready protocol and its evidence boundaries are documented in
-[docs/CL1_PROTOCOL_V2.md](docs/CL1_PROTOCOL_V2.md). Simulator results validate
-software timing and causal controls only; they are not biological-learning
-evidence.
+Run the simulator-only causal benchmark:
 
-### 4. Run the Ablation Study
-To run a simulator-only full software benchmark:
 ```bash
 python run_ablation_benchmark.py
 python analyze_ablations.py ablation_results.csv
 python plot_ablations.py
 ```
-Real CL1 defaults to one condition per independent culture invocation:
-```bash
-export SENXE_LAB_APPROVED_STIM=1
-export SENXE_MAX_STIM_AMPLITUDE_UA=1.5
-export SENXE_MAX_STIM_PHASE_WIDTH_US=200
-export SENXE_MAX_STIM_BURST_HZ=200
-export SENXE_MAX_STIM_BURST_COUNT=15
-export SENXE_MAX_STIM_CALLS=<lab-approved-limit>
-export SENXE_MAX_STIM_CHANNEL_PULSES=<lab-approved-limit>
-export SENXE_MAX_STIM_ABS_CHARGE_NC=<lab-approved-limit>
-export SENXE_RECORD_SESSION=1
-export SENXE_BENCHMARK_PROTOCOL_ID=senxe_contact_skill_v2
-python run_ablation_benchmark.py \
-  --condition contact_skill \
-  --culture-id culture_001 \
-  --sequence-index 0
-```
-For the yoked control, provide a donor schedule exported by an independent
-`contact_skill` run:
-```bash
-python run_ablation_benchmark.py \
-  --condition yoked_feedback \
-  --culture-id culture_002 \
-  --sequence-index 1 \
-  --yoked-feedback feedback_schedules/culture_001_seq0_contact_skill.json
-```
-The preregistered endpoints, retention requirements, biological replicate
-rules, and falsification criteria are defined in
-[docs/PREREGISTRATION_V2.md](docs/PREREGISTRATION_V2.md).
-The shorter access-application boundary and its fail-closed hardware gates are
-defined in
-[docs/CL1_APPLICATION_PROTOCOL.md](docs/CL1_APPLICATION_PROTOCOL.md).
 
----
+Real CL1 use additionally requires operator-approved electrical and cumulative
+dose limits. Candidate values in this repository are engineering defaults, not
+universal biological safety approval.
 
-## Author & License
+## Primary files
 
-*   **Author**: Azur (Jiahao) — Independent developer, incoming University of Alberta student.
-*   **License**: Licensed under the MIT License (changed from AGPL v3 in June 2026).
+| Path | Role |
+|---|---|
+| `senxe_demo_robosuite.py` | audited application entry point |
+| `run_ablation_benchmark.py` | causal and confirmatory benchmark |
+| `core/contact_skill.py` | compact encoder and feedback policy |
+| `core/channel_map.py` | fixed hardware-valid channel allocation |
+| `core/channel_health.py` | calibration health and reserve remap |
+| `core/neurons.py` | CL SDK adapter and stimulation safety proxy |
+| `core/spike_pipeline.py` | timestamped artifact/response windows |
+| `core/provenance.py` | protocol and implementation hashes |
+| `config/cl1_protocols.json` | frozen application and study phases |
+
+## Protocols
+
+- [Application protocol](docs/CL1_APPLICATION_PROTOCOL.md)
+- [Contact-skill capability boundary](docs/CONTACT_SKILL_V1.md)
+- [Confirmatory protocol V2](docs/CL1_PROTOCOL_V2.md)
+- [Preregistration V2](docs/PREREGISTRATION_V2.md)
+- [Archived experiments](legacy/README.md)
+
+## Scope
+
+This public repository contains the reproducible application architecture.
+Private access-request materials and unpublished long-horizon architecture are
+intentionally excluded.
+
+## Author and license
+
+Developed by Azur (Jiahao), independent researcher. Licensed under the
+[MIT License](LICENSE).
