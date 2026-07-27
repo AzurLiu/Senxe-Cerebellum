@@ -7,9 +7,10 @@ the true information content of the biological (or simulated) spikes.
 
 Conditions:
 1. none (Control): Real spikes + Real stim
-2. zero_spikes: Decoder receives [] + Real stim
-3. random_spikes: Decoder receives random channels + Real stim
-4. no_stim: Real spikes + No reward/penalty stim
+2. baseline_only: No spike residual + No feedback stim
+3. zero_spikes: Decoder receives [] + Real feedback stim
+4. random_spikes: Decoder receives random channels + Real feedback stim
+5. no_feedback: Real spikes + No reward/penalty feedback stim
 """
 
 import csv
@@ -24,9 +25,10 @@ EPISODES_PER_CONDITION = 50
 
 CONDITIONS = [
     {"name": "none (Control)", "spike_mode": "none", "stim_mode": "full"},
+    {"name": "baseline_only", "spike_mode": "zero", "stim_mode": "none"},
     {"name": "zero_spikes", "spike_mode": "zero", "stim_mode": "full"},
     {"name": "random_spikes", "spike_mode": "random", "stim_mode": "full"},
-    {"name": "no_stim", "spike_mode": "none", "stim_mode": "none"},
+    {"name": "no_feedback", "spike_mode": "none", "stim_mode": "none"},
 ]
 
 def main():
@@ -67,9 +69,19 @@ def main():
             for ep in pbar:
                 # Run headless episode
                 reward, pdi_val, _, sr, fsr = agent.run_episode(max_steps=200, record=False, ep_num=ep)
+                control_summary = agent.last_episode_control_summary
                 
                 # Log metrics
-                results_log.append([ep, name, reward, sr, fsr])
+                results_log.append([
+                    ep,
+                    name,
+                    reward,
+                    sr,
+                    fsr,
+                    control_summary["residual_applied_rate"],
+                    control_summary["mean_abs_applied_residual"],
+                    control_summary["hard_stop_count"],
+                ])
 
                 pbar.set_postfix(R=f"{reward:.1f}", SR=f"{sr:.0f}%", FSR=f"{fsr:.0f}%")
 
@@ -79,7 +91,16 @@ def main():
     csv_filename = "ablation_results.csv"
     with open(csv_filename, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Episode", "Condition", "Reward", "SuccessRate", "ForceSafeRate"])
+        writer.writerow([
+            "Episode",
+            "Condition",
+            "Reward",
+            "SuccessRate",
+            "ForceSafeRate",
+            "ResidualAppliedRate",
+            "MeanAbsAppliedResidual",
+            "HardStopCount",
+        ])
         writer.writerows(results_log)
     
     print("\n" + "=" * 60)

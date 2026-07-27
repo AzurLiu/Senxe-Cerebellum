@@ -1,8 +1,12 @@
 # Senxe Cerebellum: Biologically-Grounded Robotic Motor Control
 
 > [!WARNING]
-> **Project Falsified (Archived)**
-> This project has been falsified by the author. The fundamental task cannot be completed because the conservative memory window of the CL1 system is strictly limited to 20ms, which is insufficient for the temporal dependencies required by this framework.
+> **Original End-to-End Hypothesis Retired**
+> Direct seven-dimensional wetware control is no longer the default research
+> claim. The active development path uses a deterministic nominal controller
+> for task phase and a confidence-gated, one-axis CL1 residual for local contact
+> correction. This hybrid path is a pre-hardware hypothesis, not evidence of
+> biological learning.
 
 Senxe Cerebellum is an open-source research framework that interfaces living biological neural networks (via the **Cortical Labs CL1** microelectrode array platform) with high-precision industrial robotic manipulators. 
 
@@ -143,6 +147,18 @@ export MUJOCO_GL=glfw
 Run the primary training script:
 ```bash
 python senxe_demo_robosuite.py
+```
+The default control mode is the bounded hybrid path. Its initial authority can
+be configured without changing source:
+```bash
+export SENXE_CONTROL_MODE=hybrid_residual
+export SENXE_RESIDUAL_AXIS=2
+export SENXE_RESIDUAL_SCALE=0.08
+export SENXE_MAX_RESIDUAL_ABS=0.05
+```
+The previous direct decoder path is retained only as an explicit comparison:
+```bash
+export SENXE_CONTROL_MODE=legacy_wetware
 ```
 This script runs the 7-DoF Franka Panda robot arm task, trains the biological agent, and saves a Cyberpunk-styled video overlay `cl1_nutassembly.mp4` displaying the MEA grid, force telemetry, and live status watermarks.
 

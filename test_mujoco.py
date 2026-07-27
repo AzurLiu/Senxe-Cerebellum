@@ -1,33 +1,34 @@
-"""
-RoboSuite PegInHole quick visualization test.
+"""Manual RoboSuite NutAssembly visualization smoke test.
 
-Launches a RoboSuite PegInHole environment with a Franka Panda arm
-and renders 500 random-action steps to verify MuJoCo + RoboSuite
-installation.
+This file is named like a pytest module for historical reasons, so all
+interactive work stays inside ``main()`` to keep test collection side-effect
+free.
 
 Usage: python test_mujoco.py
 """
 import numpy as np
 import robosuite as suite
 
-# Create environment (has_renderer=True opens a 3D visualization window)
-env = suite.make("PegInHole", robots="Panda", has_renderer=True)
 
-# Reset environment
-obs = env.reset()
+def main():
+    """Render random actions in a registered single-arm environment."""
 
-print("RoboSuite test started — PegInHole window should be visible, running random actions...")
+    env = suite.make("NutAssembly", robots="Panda", has_renderer=True)
+    env.reset()
 
-# Run 500 random action steps
-for step in range(500):
-    action = np.random.uniform(-1, 1, env.action_spec[0].shape[0])
-    obs, reward, done, info = env.step(action)
-    env.render()
+    print("RoboSuite smoke started — NutAssembly should be visible.")
 
-    # Reset on episode termination
-    if done:
-        obs = env.reset()
+    try:
+        for _ in range(500):
+            action = np.random.uniform(-1, 1, env.action_spec[0].shape[0])
+            _, _, done, _ = env.step(action)
+            env.render()
+            if done:
+                env.reset()
+    finally:
+        env.close()
+    print("Smoke complete — environment closed successfully.")
 
-# Cleanup
-env.close()
-print("Test complete — environment closed successfully.")
+
+if __name__ == "__main__":
+    main()

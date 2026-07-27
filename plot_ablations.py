@@ -65,9 +65,10 @@ def main():
 
     colors = {
         "none (Control)": "#2ecc71",  # Green
+        "baseline_only": "#34495e",  # Slate
         "zero_spikes": "#e74c3c",     # Red
         "random_spikes": "#f39c12",   # Orange
-        "no_stim": "#9b59b6",         # Purple
+        "no_feedback": "#9b59b6",     # Purple
     }
 
     for cond, metrics in data.items():

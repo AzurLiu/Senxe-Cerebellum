@@ -14,6 +14,14 @@ from collections import deque
 
 from core.neurons import cl_open, warmup_calibration, is_cl_simulator, ChannelSet, StimDesign, BurstDesign
 from core.decoder import AntagonisticDecoder
+from core.hybrid_control import (
+    BoundedResidualController,
+    NominalControlConfig,
+    NominalTaskController,
+    ResidualControlConfig,
+    spike_confidence,
+    summarize_control_reports,
+)
 from core.pdi import PDI
 from core.curiosity import NeuralCuriosity
 from core.video import save_video
@@ -39,6 +47,11 @@ TORQUE_SAFETY_THRESHOLD   = 5.0
 PREDICTABLE_STIM_TOP_K    = 8
 PREDICTABLE_BURST_N       = 15
 PREDICTABLE_BURST_HZ      = 300
+CONTROL_MODE              = os.getenv("SENXE_CONTROL_MODE", "hybrid_residual").strip().lower()
+HYBRID_RESIDUAL_AXIS      = int(os.getenv("SENXE_RESIDUAL_AXIS", "2"))
+HYBRID_RESIDUAL_SCALE     = float(os.getenv("SENXE_RESIDUAL_SCALE", "0.08"))
+HYBRID_MAX_RESIDUAL_ABS   = float(os.getenv("SENXE_MAX_RESIDUAL_ABS", "0.05"))
+HYBRID_MIN_CONFIDENCE     = float(os.getenv("SENXE_MIN_RESIDUAL_CONFIDENCE", "0.15"))
 
 # ═══ RoboSuite Environment ═══
 def make_robosuite_env(render=False):
@@ -117,20 +130,39 @@ def compute_insertion_depth(info):
 # ═══ CL1 Biological Agent ═══
 class CL1Agent:
     def __init__(self, env, raw_env, neurons, channel_ranking=None, responsiveness=None,
-                 ablation_spike_mode="none", ablation_stim_mode="full"):
+                 ablation_spike_mode="none", ablation_stim_mode="full",
+                 control_mode=CONTROL_MODE):
         self.env = env; self.raw_env = raw_env; self.neurons = neurons
         self.ablation_spike_mode = ablation_spike_mode
         self.ablation_stim_mode = ablation_stim_mode
+        self.control_mode = str(control_mode).strip().lower()
+        if self.control_mode not in {"hybrid_residual", "legacy_wetware"}:
+            raise ValueError(
+                "control_mode must be 'hybrid_residual' or 'legacy_wetware'"
+            )
         self.action_dim = env.action_space.shape[0]
         self.vie = VIE(neurons, force_threshold=FORCE_SAFETY_THRESHOLD,
                        depth_threshold=INSERTION_DEPTH_THRESHOLD, raw_env=raw_env)
         resp_weights = responsiveness if channel_ranking is not None else None
         self.decoder = AntagonisticDecoder(self.action_dim, action_scale=ACTION_SCALE,
                                             channel_weights=resp_weights)
+        self.nominal_controller = NominalTaskController(NominalControlConfig(
+            action_dim=self.action_dim,
+        ))
+        self.residual_controller = BoundedResidualController(ResidualControlConfig(
+            residual_axis=HYBRID_RESIDUAL_AXIS,
+            residual_scale=HYBRID_RESIDUAL_SCALE,
+            max_residual_abs=HYBRID_MAX_RESIDUAL_ABS,
+            min_residual_confidence=HYBRID_MIN_CONFIDENCE,
+            force_soft_limit_n=FORCE_SAFETY_THRESHOLD,
+            force_hard_limit_n=FORCE_SAFETY_THRESHOLD * 1.25,
+        ))
         self.pdi = PDI()
         self.curiosity = NeuralCuriosity()
         self.episode_rewards = []
         self.best_reward = -np.inf
+        self.last_control_report = None
+        self.last_episode_control_summary = summarize_control_reports([])
         self.top_channels = (channel_ranking[:PREDICTABLE_STIM_TOP_K].tolist()
                              if channel_ranking is not None else list(range(PREDICTABLE_STIM_TOP_K)))
 
@@ -179,10 +211,14 @@ class CL1Agent:
         obs, _ = self.env.reset(seed=seed)
         obs_info = extract_obs(obs, raw_env=self.raw_env)
         self.vie.reset(); self.pdi.reset(); self.decoder.reset(); self.curiosity.reset()
+        self.nominal_controller.reset()
+        self.last_control_report = None
+        self.last_episode_control_summary = summarize_control_reports([])
         total_reward = 0.0; frames_list = []
         ep_successes = []; ep_force_safe = []
         step_rewards = deque(maxlen=50); cur_fr = np.zeros(64)
         ep_firing_acc = []; prev_dist = None
+        control_reports = []
 
         for step in range(max_steps):
             self.vie.encode(obs_info)
@@ -194,7 +230,31 @@ class CL1Agent:
             novelty = self.curiosity.compute_novelty(cur_fr)
             fep_boost = pdi_val * 0.3 + novelty * 0.1
             raw = self.decoder.decode(spikes, pdi_boost=fep_boost)
-            action = raw
+            if self.control_mode == "hybrid_residual":
+                baseline = self.nominal_controller.propose(obs_info)
+                action, control_report = self.residual_controller.compose(
+                    baseline,
+                    raw,
+                    phase=self.nominal_controller.phase,
+                    residual_confidence=spike_confidence(spikes),
+                    force_n=float(np.linalg.norm(obs_info["force"])),
+                )
+                self.last_control_report = control_report.to_dict()
+            else:
+                action = raw
+                self.last_control_report = {
+                    "phase": "legacy",
+                    "mode": "legacy_wetware",
+                    "baseline_action": np.zeros(self.action_dim).tolist(),
+                    "proposed_residual": 0.0,
+                    "applied_residual": 0.0,
+                    "final_action": action.tolist(),
+                    "residual_axis": None,
+                    "residual_confidence": spike_confidence(spikes),
+                    "force_n": float(np.linalg.norm(obs_info["force"])),
+                    "reason": "legacy_control_mode",
+                }
+            control_reports.append(dict(self.last_control_report))
             obs, reward, terminated, truncated, info = self.env.step(action)
             obs_info = extract_obs(obs, raw_env=self.raw_env)
             total_reward += reward
@@ -259,6 +319,7 @@ class CL1Agent:
             ep_avg_fr = np.mean(ep_firing_acc, axis=0)
             hud.episode_firing_history.append(ep_avg_fr)
 
+        self.last_episode_control_summary = summarize_control_reports(control_reports)
         success_rate = np.mean(ep_successes) * 100 if ep_successes else 0.0
         force_safe_rate = np.mean(ep_force_safe) * 100 if ep_force_safe else 100.0
         return total_reward, self.pdi.compute(), frames_list, success_rate, force_safe_rate
@@ -269,6 +330,7 @@ class CL1Agent:
         print("  CL1 Bio-Computer Training (" + mode_str + ")")
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
+        print(f"  Control: {self.control_mode}")
         
         all_frames = []; all_sr = []; all_fsr = []
         record_start = max(0, num_episodes - record_last_n)
@@ -323,4 +385,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
