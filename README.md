@@ -67,7 +67,7 @@ graph TB
     subgraph Bio [CL1 Wetware Platform]
         Stim -->|Electrical Pulse| MEA["64-ch Electrode Array"]
         MEA -->|Evoke Activity| Neu["Biological Neurons (STDP)"]
-        Neu -->|Extracellular Recording| Spikes["Spike Train Extraction (threshold 99.5%)"]
+        Neu -->|SDK DetectionResult timestamps| Spikes["Artifact-separated SpikeWindow"]
     end
 
     subgraph Dec [Antagonistic Motor Decoder]
@@ -156,11 +156,35 @@ export SENXE_RESIDUAL_AXIS=2
 export SENXE_RESIDUAL_SCALE=0.08
 export SENXE_MAX_RESIDUAL_ABS=0.05
 ```
+The default neural input path consumes SDK-detected spikes with their original
+CL frame timestamps. It observes a post-stimulation artifact interval before
+collecting decoder features:
+```bash
+export SENXE_SPIKE_PIPELINE=timestamped
+export SENXE_ARTIFACT_WAIT_MS=50
+export SENXE_COLLECT_WINDOW_MS=50
+export SENXE_SPIKE_BIN_MS=10
+```
+The raw-voltage percentile detector is retained only for explicit compatibility:
+```bash
+export SENXE_SPIKE_PIPELINE=legacy_voltage
+```
+Optional HDF5 session recording includes raw samples, detected spikes,
+stimulations, and the synchronized `senxe_control` data stream:
+```bash
+export SENXE_RECORD_SESSION=1
+export SENXE_RECORDING_LOCATION=recordings
+```
 The previous direct decoder path is retained only as an explicit comparison:
 ```bash
 export SENXE_CONTROL_MODE=legacy_wetware
 ```
 This script runs the 7-DoF Franka Panda robot arm task, trains the biological agent, and saves a Cyberpunk-styled video overlay `cl1_nutassembly.mp4` displaying the MEA grid, force telemetry, and live status watermarks.
+
+The current CL1-ready protocol and its evidence boundaries are documented in
+[docs/CL1_PROTOCOL_V1.md](docs/CL1_PROTOCOL_V1.md). Simulator results validate
+software timing and causal controls only; they are not biological-learning
+evidence.
 
 ### 4. Run the Ablation Study
 To run the automated information-nullification benchmark:

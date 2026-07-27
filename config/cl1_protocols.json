@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "protocols": [
+    {
+      "protocol_id": "senxe_force_residual_v1",
+      "evidence_level": "project_design",
+      "source_url": null,
+      "claim_boundary": "A proposed CL1-ready protocol. Simulator results do not establish biological learning.",
+      "artifact_wait_ms": 50.0,
+      "collect_window_ms": 50.0,
+      "encoder_policy": "Fixed sparse task encoder throughout comparison phases.",
+      "decoder_policy": "Fixed zero-bias antagonistic count decoder throughout all comparison phases.",
+      "feedback_policy": "Lab-approved structured positive/negative stimulation only during feedback_training.",
+      "controls": [
+        "baseline_only",
+        "zero_spikes",
+        "shuffled_spikes",
+        "no_feedback"
+      ],
+      "required_recordings": [
+        "raw_samples",
+        "detected_spikes",
+        "stimulations",
+        "control_actions",
+        "force_torque",
+        "protocol_phase"
+      ],
+      "phases": [
+        {
+          "phase": "calibration",
+          "episodes": 5,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false
+        },
+        {
+          "phase": "frozen_baseline",
+          "episodes": 10,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false
+        },
+        {
+          "phase": "feedback_training",
+          "episodes": 40,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": true
+        },
+        {
+          "phase": "frozen_evaluation",
+          "episodes": 20,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false
+        }
+      ]
+    },
+    {
+      "protocol_id": "doom_neuron_mechanism_card",
+      "evidence_level": "real_cl1_code",
+      "source_url": "https://github.com/SeanCole02/doom-neuron",
+      "claim_boundary": "Mechanism reference only; no source code is copied into Senxe.",
+      "artifact_wait_ms": 50.0,
+      "collect_window_ms": 50.0,
+      "encoder_policy": "Task observations are encoded before a hardware response window.",
+      "decoder_policy": "A simple zero-bias linear readout is independently reimplemented.",
+      "feedback_policy": "Task-specific feedback remains separate from motor decoding.",
+      "controls": [
+        "zero_spikes",
+        "random_spikes",
+        "frozen_encoder",
+        "frozen_decoder"
+      ],
+      "required_recordings": [
+        "detected_spikes",
+        "stimulations",
+        "actions"
+      ],
+      "phases": [
+        {
+          "phase": "frozen_evaluation",
+          "episodes": 1,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false
+        }
+      ]
+    },
+    {
+      "protocol_id": "dishbrain_pong_mechanism_card",
+      "evidence_level": "peer_reviewed",
+      "source_url": "https://pubmed.ncbi.nlm.nih.gov/36228614/",
+      "claim_boundary": "Supports low-dimensional closed-loop structured feedback, not robot-control transfer.",
+      "artifact_wait_ms": 50.0,
+      "collect_window_ms": 50.0,
+      "encoder_policy": "Low-dimensional task state stimulation.",
+      "decoder_policy": "Population activity maps to a small action space.",
+      "feedback_policy": "Structured and unstructured feedback are causally compared.",
+      "controls": [
+        "no_feedback",
+        "unstructured_feedback"
+      ],
+      "required_recordings": [
+        "detected_spikes",
+        "stimulations",
+        "task_performance"
+      ],
+      "phases": [
+        {
+          "phase": "frozen_evaluation",
+          "episodes": 1,
+          "encoder_frozen": true,
+          "decoder_frozen": true,
+          "biological_feedback_enabled": false
+        }
+      ]
+    }
+  ]
+}

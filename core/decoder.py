@@ -105,6 +105,28 @@ class AntagonisticDecoder:
         Returns:
             np.ndarray: Action vector of shape (action_dim,), clipped to [-1, 1].
         """
+        channel_counts = np.bincount(
+            np.asarray(spike_channels, dtype=np.int64),
+            minlength=64,
+        )[:64]
+        return self.decode_counts(channel_counts, pdi_boost=pdi_boost)
+
+    def decode_counts(
+        self,
+        channel_counts: np.ndarray,
+        pdi_boost: float = 0.0,
+    ) -> np.ndarray:
+        """Decode per-channel spike counts without discarding temporal density.
+
+        ``decode`` remains the compatibility entry point.  The timestamped CL1
+        pipeline calls this method so repeated spikes on one electrode retain
+        their contribution rather than being collapsed to channel presence.
+        """
+
+        counts = np.asarray(channel_counts, dtype=np.float64)
+        if counts.shape != (64,):
+            raise ValueError("channel_counts must have shape (64,)")
+        counts = np.maximum(counts, 0.0)
         action = np.zeros(self.action_dim)
 
         for i in range(self.action_dim):
@@ -119,10 +141,8 @@ class AntagonisticDecoder:
             for p in range(p_lo, p_hi):
                 ch_f = 2 * p      # Even channel -> Flexor
                 ch_e = 2 * p + 1  # Odd channel -> Extensor
-                if ch_f in spike_channels:
-                    flex += self.ch_weights[ch_f]
-                if ch_e in spike_channels:
-                    ext += self.ch_weights[ch_e]
+                flex += counts[ch_f] * self.ch_weights[ch_f]
+                ext += counts[ch_e] * self.ch_weights[ch_e]
 
             action[i] = (flex - ext) / (flex + ext + 1e-6)
 

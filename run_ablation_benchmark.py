@@ -75,6 +75,7 @@ def main():
                 results_log.append([
                     ep,
                     name,
+                    agent.current_protocol_phase.phase.value,
                     reward,
                     sr,
                     fsr,
@@ -94,6 +95,7 @@ def main():
         writer.writerow([
             "Episode",
             "Condition",
+            "ProtocolPhase",
             "Reward",
             "SuccessRate",
             "ForceSafeRate",

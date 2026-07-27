@@ -22,6 +22,13 @@ from core.hybrid_control import (
     spike_confidence,
     summarize_control_reports,
 )
+from core.learning_protocol import default_protocol_path, load_protocols
+from core.session_recording import CLSessionRecorder, SessionRecordingConfig
+from core.spike_pipeline import (
+    SpikeWindowConfig,
+    SpikeWindowReader,
+    ablate_channel_counts,
+)
 from core.pdi import PDI
 from core.curiosity import NeuralCuriosity
 from core.video import save_video
@@ -52,6 +59,14 @@ HYBRID_RESIDUAL_AXIS      = int(os.getenv("SENXE_RESIDUAL_AXIS", "2"))
 HYBRID_RESIDUAL_SCALE     = float(os.getenv("SENXE_RESIDUAL_SCALE", "0.08"))
 HYBRID_MAX_RESIDUAL_ABS   = float(os.getenv("SENXE_MAX_RESIDUAL_ABS", "0.05"))
 HYBRID_MIN_CONFIDENCE     = float(os.getenv("SENXE_MIN_RESIDUAL_CONFIDENCE", "0.15"))
+SPIKE_PIPELINE            = os.getenv("SENXE_SPIKE_PIPELINE", "timestamped").strip().lower()
+PROTOCOL_ID               = os.getenv("SENXE_PROTOCOL_ID", "senxe_force_residual_v1").strip()
+ARTIFACT_WAIT_OVERRIDE    = os.getenv("SENXE_ARTIFACT_WAIT_MS")
+COLLECT_WINDOW_OVERRIDE   = os.getenv("SENXE_COLLECT_WINDOW_MS")
+SPIKE_BIN_MS              = float(os.getenv("SENXE_SPIKE_BIN_MS", "10"))
+SPIKE_TICK_MS             = float(os.getenv("SENXE_SPIKE_TICK_MS", "10"))
+RECORD_CL_SESSION         = os.getenv("SENXE_RECORD_SESSION", "0").strip() == "1"
+RECORDING_LOCATION        = os.getenv("SENXE_RECORDING_LOCATION") or None
 
 # ═══ RoboSuite Environment ═══
 def make_robosuite_env(render=False):
@@ -140,6 +155,54 @@ class CL1Agent:
             raise ValueError(
                 "control_mode must be 'hybrid_residual' or 'legacy_wetware'"
             )
+        self.spike_pipeline = SPIKE_PIPELINE
+        if self.spike_pipeline not in {"timestamped", "legacy_voltage"}:
+            raise ValueError(
+                "SENXE_SPIKE_PIPELINE must be timestamped or legacy_voltage"
+            )
+        protocols = load_protocols(default_protocol_path())
+        if PROTOCOL_ID not in protocols:
+            raise ValueError(f"unknown SENXE_PROTOCOL_ID: {PROTOCOL_ID}")
+        self.protocol = protocols[PROTOCOL_ID]
+        self.current_protocol_phase = self.protocol.phase_for_episode(0)
+        self.artifact_wait_ms = float(
+            ARTIFACT_WAIT_OVERRIDE
+            if ARTIFACT_WAIT_OVERRIDE is not None
+            else self.protocol.artifact_wait_ms
+        )
+        self.collect_window_ms = float(
+            COLLECT_WINDOW_OVERRIDE
+            if COLLECT_WINDOW_OVERRIDE is not None
+            else self.protocol.collect_window_ms
+        )
+        self.spike_reader = (
+            SpikeWindowReader(
+                neurons,
+                SpikeWindowConfig(
+                    artifact_wait_ms=self.artifact_wait_ms,
+                    collect_window_ms=self.collect_window_ms,
+                    bin_width_ms=SPIKE_BIN_MS,
+                    tick_ms=SPIKE_TICK_MS,
+                ),
+            )
+            if self.spike_pipeline == "timestamped"
+            else None
+        )
+        self.last_spike_window = None
+        self.rng = np.random.default_rng(SEED)
+        self.session_recorder = CLSessionRecorder(
+            neurons,
+            SessionRecordingConfig(
+                enabled=RECORD_CL_SESSION,
+                file_location=RECORDING_LOCATION,
+                file_suffix="senxe_hybrid_residual_v1",
+            ),
+            attributes={
+                "protocol_id": self.protocol.protocol_id,
+                "control_mode": self.control_mode,
+                "spike_pipeline": self.spike_pipeline,
+            },
+        )
         self.action_dim = env.action_space.shape[0]
         self.vie = VIE(neurons, force_threshold=FORCE_SAFETY_THRESHOLD,
                        depth_threshold=INSERTION_DEPTH_THRESHOLD, raw_env=raw_env)
@@ -167,6 +230,27 @@ class CL1Agent:
                              if channel_ranking is not None else list(range(PREDICTABLE_STIM_TOP_K)))
 
     def _detect_spikes(self):
+        if self.spike_reader is not None:
+            window = self.spike_reader.read()
+            self.last_spike_window = window.to_dict()
+            real_counts = np.asarray(
+                window.features.channel_counts,
+                dtype=np.int64,
+            )
+            counts = ablate_channel_counts(
+                real_counts,
+                self.ablation_spike_mode,
+                rng=self.rng,
+            )
+            spikes = np.flatnonzero(counts).astype(int).tolist()
+            firing_rates = (
+                counts.astype(np.float64)
+                / max(self.collect_window_ms / 1000.0, 1e-9)
+            )
+            return spikes, firing_rates, counts
+
+        # Explicit compatibility mode only. This path cannot establish spike
+        # timing and must not be used for CL1 learning claims.
         frames = self.neurons.read(250, None)
         abs_frames = np.abs(frames.astype(np.float32))
         # Enforce an absolute minimum threshold (e.g. 50uV) to prevent 
@@ -183,10 +267,13 @@ class CL1Agent:
             spikes = np.random.choice(64, size=n, replace=False).tolist() if n else []
         else:
             spikes = real_spikes
-            
-        return spikes, firing_rates
+        counts = np.zeros(64, dtype=np.int64)
+        counts[spikes] = 1
+        self.last_spike_window = None
+        return spikes, firing_rates, counts
 
     def _predictable_stim_inject(self, reward):
+        if not self.current_protocol_phase.biological_feedback_enabled: return
         if self.ablation_stim_mode == "none": return
         if reward <= 0: return
         amp = np.clip(reward * 2.0, 0.5, 3.0)
@@ -195,6 +282,7 @@ class CL1Agent:
                           BurstDesign(PREDICTABLE_BURST_N, PREDICTABLE_BURST_HZ))
 
     def _unpredictable_stim_inject(self, penalty):
+        if not self.current_protocol_phase.biological_feedback_enabled: return
         if self.ablation_stim_mode == "none": return
         if penalty >= 0: return
         amp = np.clip(abs(penalty) * 1.5, 0.3, 2.0)
@@ -208,6 +296,8 @@ class CL1Agent:
         # Seed both numpy/random and Gym environment to guarantee exact paired layouts
         seed = 42 + ep_num
         np.random.seed(seed)
+        self.rng = np.random.default_rng(seed)
+        self.current_protocol_phase = self.protocol.phase_for_episode(ep_num)
         obs, _ = self.env.reset(seed=seed)
         obs_info = extract_obs(obs, raw_env=self.raw_env)
         self.vie.reset(); self.pdi.reset(); self.decoder.reset(); self.curiosity.reset()
@@ -222,14 +312,22 @@ class CL1Agent:
 
         for step in range(max_steps):
             self.vie.encode(obs_info)
-            spikes, cur_fr = self._detect_spikes()
+            spikes, cur_fr, spike_counts = self._detect_spikes()
             ep_firing_acc.append(cur_fr.copy())
-            self.vie.adapt(cur_fr)
+            if not self.current_protocol_phase.encoder_frozen:
+                self.vie.adapt(cur_fr)
             vel = obs_info["eef_vel"]
             self.pdi.update(vel); pdi_val = self.pdi.compute()
             novelty = self.curiosity.compute_novelty(cur_fr)
             fep_boost = pdi_val * 0.3 + novelty * 0.1
-            raw = self.decoder.decode(spikes, pdi_boost=fep_boost)
+            raw = self.decoder.decode_counts(
+                spike_counts,
+                pdi_boost=(
+                    fep_boost
+                    if self.control_mode == "legacy_wetware"
+                    else 0.0
+                ),
+            )
             if self.control_mode == "hybrid_residual":
                 baseline = self.nominal_controller.propose(obs_info)
                 action, control_report = self.residual_controller.compose(
@@ -238,6 +336,10 @@ class CL1Agent:
                     phase=self.nominal_controller.phase,
                     residual_confidence=spike_confidence(spikes),
                     force_n=float(np.linalg.norm(obs_info["force"])),
+                    residual_enabled=(
+                        self.current_protocol_phase.phase.value
+                        != "calibration"
+                    ),
                 )
                 self.last_control_report = control_report.to_dict()
             else:
@@ -255,6 +357,22 @@ class CL1Agent:
                     "reason": "legacy_control_mode",
                 }
             control_reports.append(dict(self.last_control_report))
+            self.session_recorder.append({
+                "episode": ep_num,
+                "step": step,
+                "protocol_phase": self.current_protocol_phase.phase.value,
+                "encoder_frozen": self.current_protocol_phase.encoder_frozen,
+                "decoder_frozen": self.current_protocol_phase.decoder_frozen,
+                "feedback_enabled": (
+                    self.current_protocol_phase.biological_feedback_enabled
+                ),
+                "spike_total": int(np.sum(spike_counts)),
+                "active_channels": spikes,
+                "spike_window": self.last_spike_window,
+                "control": self.last_control_report,
+                "force": np.asarray(obs_info["force"], dtype=float).tolist(),
+                "torque": np.asarray(obs_info["torque"], dtype=float).tolist(),
+            })
             obs, reward, terminated, truncated, info = self.env.step(action)
             obs_info = extract_obs(obs, raw_env=self.raw_env)
             total_reward += reward
@@ -331,21 +449,29 @@ class CL1Agent:
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
         print(f"  Control: {self.control_mode}")
+        print(f"  Protocol: {self.protocol.protocol_id}")
+        print(f"  Spikes: {self.spike_pipeline}")
         
         all_frames = []; all_sr = []; all_fsr = []
         record_start = max(0, num_episodes - record_last_n)
 
-        pbar = tqdm(range(num_episodes), desc="CL1", ncols=90)
-        for ep in pbar:
-            rec = (ep >= record_start)
-            reward, pdi_val, frames, sr, fsr = self.run_episode(record=rec, ep_num=ep)
-            self.episode_rewards.append(reward)
-            all_sr.append(sr); all_fsr.append(fsr)
-            if rec: all_frames.extend(frames)
+        self.session_recorder.start()
+        try:
+            pbar = tqdm(range(num_episodes), desc="CL1", ncols=90)
+            for ep in pbar:
+                rec = (ep >= record_start)
+                reward, pdi_val, frames, sr, fsr = self.run_episode(record=rec, ep_num=ep)
+                self.episode_rewards.append(reward)
+                all_sr.append(sr); all_fsr.append(fsr)
+                if rec: all_frames.extend(frames)
 
-            avg = np.mean(self.episode_rewards[-20:])
-            pbar.set_postfix(R=f"{reward:.1f}", avg20=f"{avg:.1f}",
-                             PDI=f"{pdi_val:.2f}", SR=f"{sr:.0f}%", FSR=f"{fsr:.0f}%")
+                avg = np.mean(self.episode_rewards[-20:])
+                phase = self.current_protocol_phase.phase.value
+                pbar.set_postfix(R=f"{reward:.1f}", avg20=f"{avg:.1f}",
+                                 phase=phase, PDI=f"{pdi_val:.2f}",
+                                 SR=f"{sr:.0f}%", FSR=f"{fsr:.0f}%")
+        finally:
+            self.session_recorder.stop()
 
         final = np.mean(self.episode_rewards[-20:])
         final_sr = np.mean(all_sr[-20:]); final_fsr = np.mean(all_fsr[-20:])

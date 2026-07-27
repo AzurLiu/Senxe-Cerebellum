@@ -179,6 +179,7 @@ class BoundedResidualController:
         phase: TaskPhase | str,
         residual_confidence: float,
         force_n: float,
+        residual_enabled: bool = True,
     ) -> tuple[np.ndarray, HybridControlReport]:
         """Return the safe final action and an auditable composition report."""
 
@@ -204,7 +205,9 @@ class BoundedResidualController:
         else:
             final = baseline.copy()
             neural = None if neural_action is None else np.asarray(neural_action, dtype=float).reshape(-1)
-            if neural is not None and neural.size > self.config.residual_axis:
+            if not residual_enabled:
+                reason = "protocol_phase_gate"
+            elif neural is not None and neural.size > self.config.residual_axis:
                 proposed = float(neural[self.config.residual_axis]) * self.config.residual_scale
                 if not np.isfinite(proposed):
                     reason = "non_finite_neural_action"

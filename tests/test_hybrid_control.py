@@ -153,6 +153,24 @@ def test_hard_force_limit_stops_entire_action():
     assert report.reason == "force_hard_limit"
 
 
+def test_protocol_phase_gate_keeps_calibration_on_baseline():
+    controller = BoundedResidualController()
+    baseline = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+
+    final, report = controller.compose(
+        baseline,
+        np.ones(7),
+        phase=TaskPhase.APPROACH_NUT,
+        residual_confidence=1.0,
+        force_n=0.0,
+        residual_enabled=False,
+    )
+
+    assert np.allclose(final, baseline)
+    assert report.mode == "baseline_only"
+    assert report.reason == "protocol_phase_gate"
+
+
 def test_spike_confidence_is_unique_channel_count_and_bounded():
     assert spike_confidence([]) == 0.0
     assert spike_confidence([1, 1, 2], target_count=4) == 0.5
