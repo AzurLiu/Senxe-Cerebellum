@@ -87,3 +87,16 @@ def test_default_contact_agent_runs_audited_loop_without_legacy_components():
         assert neurons.stim_calls > 0
     finally:
         env.close()
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_extract_obs_refuses_robot_without_force_sensor(monkeypatch):
+    pytest.importorskip("robosuite")
+    env, raw_env = demo.make_robosuite_env(render=False)
+    try:
+        obs, _ = env.reset(seed=0)
+        monkeypatch.setattr(raw_env, "robots", [SimpleNamespace()])
+        with pytest.raises(RuntimeError, match="ee_force"):
+            demo.extract_obs(obs, raw_env=raw_env)
+    finally:
+        env.close()

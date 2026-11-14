@@ -285,3 +285,26 @@ def test_contact_summary_tracks_xyz_compliance_and_retract():
     assert summary["mean_residual_norm"] > 0
     assert summary["mean_compliance_scale"] == 0.85
     assert summary["retract_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "force",
+    [[np.nan, 0.0, 0.0], [0.0, np.inf, 0.0], [0.0, 0.0, -np.inf]],
+)
+def test_non_finite_force_reading_fails_closed_to_hard_stop(force):
+    controller = ContactSkillController()
+    baseline = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    skill = np.array([1.0, 1.0, 1.0, 0.0, 0.0])
+
+    final, report = controller.compose(
+        baseline,
+        skill,
+        phase=TaskPhase.INSERT,
+        residual_confidence=1.0,
+        force_vector_n=np.array(force),
+    )
+
+    assert np.allclose(final, 0.0)
+    assert np.allclose(report.applied_residual_vector, 0.0)
+    assert report.mode == "hard_stop"
+    assert report.reason == "non_finite_force"

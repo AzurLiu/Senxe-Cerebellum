@@ -453,7 +453,12 @@ class BoundedResidualController:
         mode = "baseline_only"
         reason = "no_neural_action"
 
-        if measured_force >= self.config.force_hard_limit_n:
+        if not np.isfinite(measured_force):
+            # Fail closed on an untrustworthy force reading.
+            final = np.zeros_like(baseline)
+            mode = "hard_stop"
+            reason = "non_finite_force"
+        elif measured_force >= self.config.force_hard_limit_n:
             final = np.zeros_like(baseline)
             mode = "hard_stop"
             reason = "force_hard_limit"
