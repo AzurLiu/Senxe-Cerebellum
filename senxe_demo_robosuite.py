@@ -171,8 +171,16 @@ def extract_obs(obs, raw_env=None):
 
         eef_to_peg = peg - eef
         
-        frc_raw = getattr(raw_env.robots[0], "ee_force", np.zeros(3))
-        trq_raw = getattr(raw_env.robots[0], "ee_torque", np.zeros(3))
+        # No zero fallback: a missing force/torque sensor must not
+        # masquerade as "no contact" and silently disable the force supervisor.
+        robot = raw_env.robots[0]
+        if not hasattr(robot, "ee_force") or not hasattr(robot, "ee_torque"):
+            raise RuntimeError(
+                "robot does not expose ee_force/ee_torque; "
+                "the deterministic force supervisor cannot run"
+            )
+        frc_raw = robot.ee_force
+        trq_raw = robot.ee_torque
         frc = frc_raw["right"] if isinstance(frc_raw, dict) and "right" in frc_raw else frc_raw
         trq = trq_raw["right"] if isinstance(trq_raw, dict) and "right" in trq_raw else trq_raw
         frc = np.array(frc).flatten()[:3]

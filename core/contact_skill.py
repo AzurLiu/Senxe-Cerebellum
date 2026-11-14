@@ -364,7 +364,14 @@ class ContactSkillController:
         mode = "baseline_only"
         reason = "contact_skill_disabled"
 
-        if force_n >= cfg.force_hard_limit_n:
+        if not np.isfinite(force_n):
+            # A NaN or inf force reading means the sensor cannot be trusted:
+            # fail closed instead of letting every threshold comparison
+            # evaluate False and silently grant neural authority.
+            final[:] = 0.0
+            mode = "hard_stop"
+            reason = "non_finite_force"
+        elif force_n >= cfg.force_hard_limit_n:
             final[:] = 0.0
             mode = "hard_stop"
             reason = "force_hard_limit"

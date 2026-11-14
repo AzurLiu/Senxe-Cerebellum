@@ -1,7 +1,7 @@
 # Senxe Cerebellum — Bounded CL1 Contact-Skill Control
 
 [![Unit Tests](https://github.com/AzurLiu/Senxe-Cerebellum/actions/workflows/test.yml/badge.svg)](https://github.com/AzurLiu/Senxe-Cerebellum/actions/workflows/test.yml)
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 Senxe Cerebellum is an open experimental architecture for testing whether

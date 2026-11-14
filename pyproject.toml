@@ -7,7 +7,7 @@ name = "senxe-cerebellum"
 version = "5.1.0"
 description = "Biologically-grounded robotic motor control framework interfacing Cortical Labs MEA with robotic manipulators"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
     "gymnasium[mujoco]>=1.0.0",
@@ -20,7 +20,7 @@ dependencies = [
     "tqdm>=4.60.0",
     "numpy>=1.24.0",
     "opencv-python>=4.8.0",
-    "cl-sdk"
+    "cl-sdk>=0.1.0,<2.0"
 ]
 
 [tool.setuptools.packages.find]

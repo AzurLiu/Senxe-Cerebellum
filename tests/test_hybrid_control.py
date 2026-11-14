@@ -1,6 +1,7 @@
 """Tests for the private hybrid nominal-plus-residual control slice."""
 
 import numpy as np
+import pytest
 
 from core.hybrid_control import (
     BoundedResidualController,
@@ -267,3 +268,20 @@ def test_episode_summary_tracks_residual_authority_and_stops():
     assert np.isclose(summary["mean_abs_applied_residual"], 0.02 / 3)
     assert summary["hard_stop_count"] == 1
     assert summary["phase_counts"] == {"insert": 3}
+
+
+@pytest.mark.parametrize("force_n", [float("nan"), float("inf")])
+def test_non_finite_force_reading_fails_closed_to_hard_stop(force_n):
+    controller = BoundedResidualController()
+
+    final, report = controller.compose(
+        np.ones(7) * 0.1,
+        np.ones(7),
+        phase=TaskPhase.INSERT,
+        residual_confidence=1.0,
+        force_n=force_n,
+    )
+
+    assert np.allclose(final, 0.0)
+    assert report.mode == "hard_stop"
+    assert report.reason == "non_finite_force"
