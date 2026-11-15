@@ -28,6 +28,7 @@ from core.neurons import (
     cl_open,
     is_cl_simulator,
     require_stimulation_approval,
+    simulator_mode_hint,
     stimulation_budget_delta,
     stimulation_limits_from_env,
     timestamped_contact_calibration,
@@ -369,6 +370,7 @@ def require_hardware_evidence_recording() -> None:
             "Real CL1 experiments require SENXE_RECORD_SESSION=1 so raw "
             "samples, detected spikes, stimulations, and synchronized control "
             "telemetry are retained."
+            + simulator_mode_hint()
         )
 
 # ═══ CL1 Biological Agent ═══

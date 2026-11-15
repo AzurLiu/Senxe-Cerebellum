@@ -111,6 +111,10 @@ Before every SDK stimulation call, the proxy verifies:
 - cumulative channel pulses;
 - cumulative absolute charge.
 
+Simulator mode is never inferred from SDK internals. It requires
+`SENXE_SIMULATOR=1`, and is refused if the installed CL SDK does not look like
+the replay simulator. Without it, every run is treated as real CL1 hardware.
+
 Real-hardware stimulation is blocked until the operator supplies explicit
 approved limits. Calibration checks both input evoked responses and motor
 readout viability. A failed fixed mapping stops the task unless a
@@ -152,6 +156,7 @@ pytest -q
 Run the audited 22-episode simulator/application path:
 
 ```bash
+export SENXE_SIMULATOR=1
 export SENXE_CONTROL_MODE=contact_skill
 export SENXE_GENERALIZATION=1
 export SENXE_SPIKE_PIPELINE=timestamped
@@ -161,6 +166,7 @@ python senxe_demo_robosuite.py
 Run the simulator-only causal benchmark:
 
 ```bash
+export SENXE_SIMULATOR=1
 python run_ablation_benchmark.py
 python analyze_ablations.py ablation_results.csv
 python plot_ablations.py

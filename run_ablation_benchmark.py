@@ -32,6 +32,7 @@ from core.neurons import (
     cl_open,
     is_cl_simulator,
     require_stimulation_approval,
+    simulator_mode_hint,
     timestamped_contact_calibration,
 )
 from core.yoked_feedback import (
@@ -245,11 +246,13 @@ def _validate_hardware_scope(args: argparse.Namespace, simulator: bool) -> None:
         return
     if not args.culture_id or args.culture_id == "simulator":
         raise RuntimeError(
-            "Real CL1 runs require a non-placeholder --culture-id"
+            "Real CL1 runs require a non-placeholder --culture-id."
+            + simulator_mode_hint()
         )
     if not RECORD_CL_SESSION:
         raise RuntimeError(
-            "Real CL1 ablations require SENXE_RECORD_SESSION=1"
+            "Real CL1 ablations require SENXE_RECORD_SESSION=1."
+            + simulator_mode_hint()
         )
     if args.output.exists() and args.output.stat().st_size > 0:
         with args.output.open(newline="", encoding="utf-8") as handle:

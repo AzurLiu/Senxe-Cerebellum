@@ -1,12 +1,16 @@
 import pytest
 
+import core.neurons as neurons_module
 from core.neurons import (
+    SIMULATOR_ENV_VAR,
     BudgetedNeurons,
     BurstDesign,
     ChannelSet,
     StimSafetyLimits,
     StimDesign,
     is_cl_simulator,
+    require_stimulation_approval,
+    sdk_reports_simulator,
     stimulation_budget_delta,
 )
 
@@ -41,7 +45,53 @@ class _CurrentBurst:
 
 
 def test_installed_cl_sdk_is_recognized_as_simulator():
+    assert sdk_reports_simulator() is True
     assert is_cl_simulator() is True
+
+
+@pytest.mark.parametrize("value", [None, "", "0"])
+def test_simulator_mode_is_never_inferred_from_the_sdk(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(SIMULATOR_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(SIMULATOR_ENV_VAR, value)
+
+    assert sdk_reports_simulator() is True
+    assert is_cl_simulator() is False
+
+
+def test_simulator_mode_is_refused_when_sdk_does_not_look_like_simulator(
+    monkeypatch,
+):
+    monkeypatch.setattr(neurons_module, "sdk_reports_simulator", lambda: False)
+
+    with pytest.raises(RuntimeError, match="does not look like"):
+        is_cl_simulator()
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "2"])
+def test_ambiguous_simulator_setting_is_rejected(monkeypatch, value):
+    monkeypatch.setenv(SIMULATOR_ENV_VAR, value)
+
+    with pytest.raises(ValueError, match=SIMULATOR_ENV_VAR):
+        is_cl_simulator()
+
+
+def test_unset_simulator_mode_enforces_lab_approval_with_hint(monkeypatch):
+    monkeypatch.delenv(SIMULATOR_ENV_VAR, raising=False)
+    monkeypatch.delenv("SENXE_LAB_APPROVED_STIM", raising=False)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        require_stimulation_approval()
+
+    assert "SENXE_LAB_APPROVED_STIM=1" in str(excinfo.value)
+    assert f"{SIMULATOR_ENV_VAR}=1" in str(excinfo.value)
+
+
+def test_explicit_simulator_mode_skips_lab_approval(monkeypatch):
+    monkeypatch.delenv("SENXE_LAB_APPROVED_STIM", raising=False)
+
+    require_stimulation_approval()
 
 
 @pytest.mark.parametrize(

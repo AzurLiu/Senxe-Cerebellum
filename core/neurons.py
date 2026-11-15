@@ -53,14 +53,17 @@ if CL_AVAILABLE:
         self._closed = True
     Neurons.close = _idempotent_close
 
-def is_cl_simulator() -> bool:
-    """Returns True if cl-sdk is running in simulation mode (no real CL1 hardware).
-    
-    Detection: The official cl-sdk ships as a mock/simulator that replays
-    Poisson-sampled recordings. We detect this by checking whether the
-    Neurons class has a mock-only replay attribute in its annotations.
-    CL SDK 0.1 uses ``_replay_file`` and CL SDK 1.x uses
-    ``_replay_attrs``.
+SIMULATOR_ENV_VAR = "SENXE_SIMULATOR"
+
+
+def sdk_reports_simulator() -> bool:
+    """Best-effort hint that the installed cl-sdk is the replay simulator.
+
+    The official cl-sdk mock replays Poisson-sampled recordings and its
+    ``Neurons`` class carries a mock-only replay annotation (``_replay_file``
+    in CL SDK 0.1, ``_replay_attrs`` in 1.x). These are private SDK details,
+    so this hint is only used to cross-check the operator's explicit choice
+    and to improve error messages; it never grants simulator mode by itself.
     """
     try:
         from cl.neurons import Neurons
@@ -68,6 +71,44 @@ def is_cl_simulator() -> bool:
         return bool({"_replay_file", "_replay_attrs"} & set(annotations))
     except Exception:
         return False
+
+
+def is_cl_simulator() -> bool:
+    """Return True only when the operator explicitly selected simulator mode.
+
+    Simulator mode skips the laboratory stimulation-approval gate, channel
+    health enforcement, and hardware evidence recording, so it is never
+    inferred from SDK internals. It requires ``SENXE_SIMULATOR=1``; anything
+    else is treated as real CL1 hardware (fail closed). Selecting simulator
+    mode while the SDK does not look like the simulator is refused, so a
+    real device can never be run under relaxed safety rules.
+    """
+    requested = os.getenv(SIMULATOR_ENV_VAR, "").strip()
+    if requested not in {"", "0", "1"}:
+        raise ValueError(
+            f"{SIMULATOR_ENV_VAR} must be 1 (simulator) or 0/unset "
+            f"(real CL1 hardware), got {requested!r}"
+        )
+    if requested != "1":
+        return False
+    if not sdk_reports_simulator():
+        raise RuntimeError(
+            f"{SIMULATOR_ENV_VAR}=1 was set, but the installed CL SDK does "
+            "not look like the replay simulator. Refusing to run a possible "
+            "real CL1 device without hardware safety gates."
+        )
+    return True
+
+
+def simulator_mode_hint() -> str:
+    """Suffix for hardware-gate errors when the simulator SDK is installed."""
+
+    if sdk_reports_simulator():
+        return (
+            f" If you are running the cl-sdk simulator, set "
+            f"{SIMULATOR_ENV_VAR}=1 instead."
+        )
+    return ""
 
 
 def require_stimulation_approval() -> None:
@@ -81,6 +122,7 @@ def require_stimulation_approval() -> None:
             "Real CL1 stimulation is blocked until the supervising laboratory "
             "sets SENXE_LAB_APPROVED_STIM=1 after reviewing pulse amplitude, "
             "phase width, frequency, channel allocation, and cumulative dose."
+            + simulator_mode_hint()
         )
     required_limits = (
         "SENXE_MAX_STIM_AMPLITUDE_UA",
