@@ -60,6 +60,11 @@ stimulated step does not satisfy the artifact-exclusion interval.
 python senxe_demo_robosuite.py
 ```
 
+Software validation against the cl-sdk replay simulator must set
+`SENXE_SIMULATOR=1` explicitly. Without it the run is treated as real CL1
+hardware and every laboratory approval, recording and channel-health gate
+applies.
+
 The default command uses the 22-episode application profile and does not
 construct the VIE, PDI, Curiosity, legacy decoder or single-axis residual
 controller.
