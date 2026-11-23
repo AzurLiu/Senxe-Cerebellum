@@ -235,6 +235,16 @@ def parse_args() -> argparse.Namespace:
         default=Path("feedback_schedules"),
     )
     parser.add_argument(
+        "--restart-interrupted-run",
+        action="store_true",
+        help=(
+            "Explicitly restart a run that the ledger shows was started "
+            "before for this culture, condition and sequence index. The "
+            "culture is calibrated (stimulated) again, and the restart is "
+            "recorded in the ledger."
+        ),
+    )
+    parser.add_argument(
         "--allow-hardware-crossover",
         action="store_true",
         help=(
@@ -449,6 +459,7 @@ def _record_run_started(
     sequence_index: int,
     conditions: list[str],
     backend: str,
+    restart_of: int = 0,
 ) -> None:
     """Durably note that a culture is about to be stimulated.
 
@@ -460,7 +471,8 @@ def _record_run_started(
     path = run_ledger_path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
-        "event": "run_started",
+        "event": "run_restarted" if restart_of else "run_started",
+        "prior_starts": int(restart_of),
         "culture_id": culture_id,
         "sequence_index": int(sequence_index),
         "conditions": list(conditions),
@@ -477,6 +489,21 @@ def _donor_schedule_path(args: argparse.Namespace) -> Path:
     return args.feedback_output_dir / (
         f"{args.culture_id}_seq{args.sequence_index}_contact_skill.json"
     )
+
+
+def _prior_starts(
+    args: argparse.Namespace,
+    selected: list[str],
+) -> list[dict[str, Any]]:
+    """Ledger entries for this culture, sequence index and any selected condition."""
+
+    return [
+        entry
+        for entry in _read_run_ledger(args.output)
+        if str(entry.get("culture_id", "")) == str(args.culture_id)
+        and int(entry.get("sequence_index", -1)) == int(args.sequence_index)
+        and set(map(str, entry.get("conditions", []))) & set(selected)
+    ]
 
 
 def _preflight_outputs(
@@ -510,6 +537,20 @@ def _preflight_outputs(
                 }
                 for episode in range(args.episodes)
             ],
+        )
+    # The CSV only knows about runs that finished at least one episode. A
+    # run that crashed after calibration but before its first row is only
+    # visible in the ledger, and silently starting it again would calibrate
+    # (stimulate) the same culture a second time.
+    earlier = _prior_starts(args, selected)
+    if earlier and not getattr(args, "restart_interrupted_run", False):
+        raise RuntimeError(
+            "The run ledger shows this culture, sequence index and "
+            f"condition were already started ({len(earlier)} time(s)). "
+            "A started run without complete results is an interrupted run: "
+            "it is not restarted automatically. Use a new culture or "
+            "sequence index, or pass --restart-interrupted-run to restart "
+            "it deliberately."
         )
     if "contact_skill" in selected and _donor_schedule_path(args).exists():
         raise RuntimeError(
@@ -772,6 +813,7 @@ def main() -> None:
             sequence_index=args.sequence_index,
             conditions=selected,
             backend=backend,
+            restart_of=len(_prior_starts(args, selected)),
         )
         calibration_recorder = CLSessionRecorder(
             experiment_neurons,

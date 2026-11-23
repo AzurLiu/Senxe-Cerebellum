@@ -3,6 +3,7 @@
   "protocols": [
     {
       "protocol_id": "senxe_contact_skill_v2",
+      "confirmatory": true,
       "evidence_level": "project_design",
       "source_url": null,
       "claim_boundary": "A proposed CL1-ready multi-axis contact-skill protocol. Simulator results do not establish biological learning.",

@@ -43,16 +43,19 @@ def _write(path: Path, fields: list[str], rows: list[dict]) -> None:
 def incomplete_runs(
     rows: list[dict[str, str]],
     protocol_id: str,
-) -> dict[tuple[str, str], str]:
-    """Return every (culture, condition) run that is not a complete protocol.
+) -> dict[tuple[str, str, str], str]:
+    """Return every (culture, condition, run) that is not a complete protocol.
 
-    A run is complete only when it has exactly one row for every episode of
-    the frozen protocol, each in the phase the protocol assigns to that
+    Completeness is checked per ``RunID``, never per culture: a run is
+    complete only when that single run has exactly one row for every episode
+    of the frozen protocol, each in the phase the protocol assigns to that
     episode and in the scenario split that phase requires (held-out for
     evaluation and retention phases, training otherwise), and its
-    ``ProtocolHash`` is that protocol's hash. Episode rows are written as
-    each episode ends, so an interrupted acquisition leaves a prefix of a
-    run on disk; that prefix must never satisfy a confirmatory gate.
+    ``ProtocolHash`` is that protocol's hash. A culture and condition must
+    also map to exactly one run, so two interrupted acquisitions cannot be
+    spliced into one "complete" experiment. Episode rows are written as each
+    episode ends, so an interrupted acquisition leaves a prefix of a run on
+    disk; that prefix must never satisfy a confirmatory gate.
     """
 
     protocol = load_protocols(default_protocol_path())[protocol_id]
@@ -69,18 +72,27 @@ def incomplete_runs(
         )
         expected.append((phase.phase.value, split))
 
-    runs: dict[tuple[str, str], list[dict[str, str]]] = {}
+    runs: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    run_ids_by_group: dict[tuple[str, str], set[str]] = {}
     for row in rows:
-        runs.setdefault(
-            (str(row["CultureID"]), str(row["Condition"])),
-            [],
-        ).append(row)
+        culture = str(row["CultureID"])
+        condition = str(row["Condition"])
+        run_id = str(row.get("RunID", "")).strip()
+        runs.setdefault((culture, condition, run_id), []).append(row)
+        run_ids_by_group.setdefault((culture, condition), set()).add(run_id)
 
-    problems: dict[tuple[str, str], str] = {}
+    problems: dict[tuple[str, str, str], str] = {}
     for key, run_rows in sorted(runs.items()):
         by_episode: dict[int, dict[str, str]] = {}
         reason = ""
-        for row in run_rows:
+        if not key[2]:
+            reason = "rows have no RunID"
+        elif len(run_ids_by_group[key[:2]]) > 1:
+            reason = (
+                "culture and condition are split across "
+                f"{len(run_ids_by_group[key[:2]])} runs"
+            )
+        for row in ([] if reason else run_rows):
             try:
                 episode = int(str(row.get("Episode", "")).strip())
             except ValueError:
@@ -146,6 +158,7 @@ def main() -> None:
         "EpisodeSuccess",
         "ProtocolHash",
         "ProtocolPhase",
+        "RunID",
         "RuntimeVersions",
         "ScenarioSplit",
         "StimSafetyLimits",
@@ -182,12 +195,23 @@ def main() -> None:
     hardware_evidence = backends == {"hardware"}
     run_problems = incomplete_runs(rows, args.protocol_id)
     protocol_complete = not run_problems
+    # A demonstration protocol can be analysed descriptively (means and
+    # intervals), but only a protocol declared confirmatory in the frozen
+    # configuration may set a confirmatory or falsification flag.
+    confirmatory_protocol = load_protocols(
+        default_protocol_path()
+    )[args.protocol_id].confirmatory
     _write(
         args.output_dir / "incomplete_runs.csv",
-        ["CultureID", "Condition", "Reason"],
+        ["CultureID", "Condition", "RunID", "Reason"],
         [
-            {"CultureID": culture, "Condition": condition, "Reason": reason}
-            for (culture, condition), reason in run_problems.items()
+            {
+                "CultureID": culture,
+                "Condition": condition,
+                "RunID": run_id,
+                "Reason": reason,
+            }
+            for (culture, condition, run_id), reason in run_problems.items()
         ],
     )
     conditions_by_culture: dict[str, set[str]] = {}
@@ -234,8 +258,11 @@ def main() -> None:
                 "Backend": "|".join(sorted(backends)),
                 "ProtocolComplete": int(protocol_complete),
                 "IncompleteRuns": len(run_problems),
+                "ProtocolID": args.protocol_id,
+                "ConfirmatoryProtocol": int(confirmatory_protocol),
                 "ConfirmatoryValid": int(
                     hardware_evidence
+                    and confirmatory_protocol
                     and protocol_complete
                     and independent_culture_design
                     and provenance_consistent
@@ -310,9 +337,12 @@ def main() -> None:
                 # force-safety non-inferiority margin.
                 "ProtocolComplete": int(protocol_complete),
                 "IncompleteRuns": len(run_problems),
+                "ProtocolID": args.protocol_id,
+                "ConfirmatoryProtocol": int(confirmatory_protocol),
                 "PassesFalsificationGate": int(
                     valid
                     and hardware_evidence
+                    and confirmatory_protocol
                     and protocol_complete
                     and independent_culture_design
                     and provenance_consistent
@@ -333,6 +363,11 @@ def main() -> None:
         list(comparison_rows[0]) if comparison_rows else [],
         comparison_rows,
     )
+    if not confirmatory_protocol:
+        print(
+            f"{args.protocol_id} is not a confirmatory protocol: results "
+            "are descriptive only and every confirmatory flag is 0."
+        )
     if run_problems:
         print(
             f"{len(run_problems)} run(s) are not a complete "

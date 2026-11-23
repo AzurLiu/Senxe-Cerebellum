@@ -108,13 +108,13 @@ def _evidence_rows(
     *,
     episodes: int | None = None,
     split: str | None = None,
+    protocol_id: str = "senxe_contact_skill_v2",
 ) -> list[dict]:
     """Synthetic table: six cultures per condition, full protocol by default."""
 
     from core.learning_protocol import default_protocol_path, load_protocols
     from core.provenance import project_provenance
 
-    protocol_id = "senxe_contact_skill_v2"
     protocol = load_protocols(default_protocol_path())[protocol_id]
     protocol_hash = project_provenance(protocol_id=protocol_id)["protocol_hash"]
     count = protocol.total_episodes if episodes is None else episodes
@@ -141,6 +141,7 @@ def _evidence_rows(
                     "EpisodeSuccess": success,
                     "ProtocolHash": protocol_hash,
                     "ProtocolPhase": phase.phase.value,
+                    "RunID": f"{condition}_{culture}:seq0:{condition}",
                     "RuntimeVersions": "r",
                     "ScenarioSplit": split or expected_split,
                     "StimSafetyLimits": "{}",
@@ -151,7 +152,7 @@ def _evidence_rows(
     return rows
 
 
-def _run_analysis(tmp_path, monkeypatch, rows):
+def _run_analysis(tmp_path, monkeypatch, rows, protocol_id=None):
     source = tmp_path / "in.csv"
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -161,7 +162,8 @@ def _run_analysis(tmp_path, monkeypatch, rows):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["analyze_ablations.py", str(source), "--output-dir", str(out)],
+        ["analyze_ablations.py", str(source), "--output-dir", str(out)]
+        + (["--protocol-id", protocol_id] if protocol_id else []),
     )
     analyze_ablations.main()
     with (out / "culture_level_summary.csv").open() as handle:
@@ -220,6 +222,26 @@ def _one_retention_episode_per_culture():
     return list(kept.values())
 
 
+def _split_each_culture_across_two_runs(rows):
+    """Two interrupted 80-episode runs whose episode numbers happen to join."""
+
+    half = (max(row["Episode"] for row in rows) + 1) // 2
+    return [
+        dict(
+            row,
+            RunID=row["RunID"].replace(
+                ":seq0:",
+                ":seq0:" if row["Episode"] < half else ":seq1:",
+            ),
+        )
+        for row in rows
+    ]
+
+
+def _without_run_ids(rows):
+    return [dict(row, RunID="") for row in rows]
+
+
 def _duplicate_one_episode(rows):
     return rows + [dict(rows[0])]
 
@@ -243,6 +265,14 @@ def _duplicate_one_episode(rows):
             lambda: _duplicate_one_episode(_evidence_rows("hardware")),
             "more than once",
         ),
+        # Every episode is present, but only by splicing two runs together.
+        (
+            lambda: _split_each_culture_across_two_runs(
+                _evidence_rows("hardware")
+            ),
+            "split across 2 runs",
+        ),
+        (lambda: _without_run_ids(_evidence_rows("hardware")), "no RunID"),
     ],
 )
 def test_incomplete_hardware_runs_never_pass_a_gate(
@@ -262,6 +292,37 @@ def test_incomplete_hardware_runs_never_pass_a_gate(
     assert {row["ConfirmatoryValid"] for row in summary} == {"0"}
     assert {row["PassesFalsificationGate"] for row in comparisons} == {"0"}
     assert {row["ProtocolComplete"] for row in comparisons} == {"0"}
+
+
+def test_demonstration_protocol_never_sets_a_confirmatory_flag(
+    tmp_path,
+    monkeypatch,
+):
+    from core.learning_protocol import default_protocol_path, load_protocols
+
+    protocols = load_protocols(default_protocol_path())
+    assert protocols["senxe_contact_skill_v2"].confirmatory is True
+    assert [
+        name for name, spec in protocols.items() if spec.confirmatory
+    ] == ["senxe_contact_skill_v2"]
+
+    demo_id = "senxe_contact_skill_application_v1"
+    summary, comparisons, incomplete = _run_analysis(
+        tmp_path,
+        monkeypatch,
+        _evidence_rows("hardware", protocol_id=demo_id),
+        protocol_id=demo_id,
+    )
+
+    # Complete, hardware-labelled, six cultures per condition: everything a
+    # confirmatory table needs except a confirmatory protocol.
+    assert not incomplete
+    assert {row["ProtocolComplete"] for row in comparisons} == {"1"}
+    assert {row["ConfirmatoryProtocol"] for row in comparisons} == {"0"}
+    assert {row["PassesFalsificationGate"] for row in comparisons} == {"0"}
+    assert {row["ConfirmatoryValid"] for row in summary} == {"0"}
+    # Descriptive statistics are still reported.
+    assert all(row["CultureMean"] != "" for row in summary)
 
 
 # ── 3. stimulation gate cannot be bypassed ───────────────────────────────
@@ -693,3 +754,85 @@ def test_evidence_rows_record_the_initial_layout():
         "InitialNutYM",
         "InitialNutYawDeg",
     } <= set(benchmark.CSV_FIELDS)
+
+
+def _benchmark_argv(tmp_path, *extra):
+    return [
+        "run_ablation_benchmark.py",
+        "--condition", "contact_skill",
+        "--episodes", "2",
+        "--output", str(tmp_path / "results.csv"),
+        "--feedback-output-dir", str(tmp_path / "fb"),
+        *extra,
+    ]
+
+
+def test_interrupted_run_is_not_restarted_without_an_explicit_flag(
+    tmp_path,
+    monkeypatch,
+):
+    """Crash after calibration, before the first CSV row: ledger only."""
+
+    output = tmp_path / "results.csv"
+    benchmark._record_run_started(
+        output,
+        culture_id="simulator",
+        sequence_index=0,
+        conditions=["contact_skill"],
+        backend="simulator",
+    )
+    assert not output.exists()
+
+    class _Opened(Exception):
+        pass
+
+    opened = []
+
+    def _open(*args, **kwargs):
+        opened.append(1)
+        raise _Opened()
+
+    monkeypatch.setattr(benchmark, "cl_open", _open)
+    monkeypatch.setattr(sys, "argv", _benchmark_argv(tmp_path))
+    with pytest.raises(RuntimeError, match="interrupted run"):
+        benchmark.main()
+    assert not opened
+
+    # Another sequence index is a different run and is not blocked.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _benchmark_argv(tmp_path, "--sequence-index", "1"),
+    )
+    with pytest.raises(_Opened):
+        benchmark.main()
+    assert opened == [1]
+
+    # A deliberate restart is allowed through to the device.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _benchmark_argv(tmp_path, "--restart-interrupted-run"),
+    )
+    with pytest.raises(_Opened):
+        benchmark.main()
+    assert opened == [1, 1]
+
+
+def test_deliberate_restart_is_recorded_in_the_ledger(tmp_path):
+    output = tmp_path / "results.csv"
+    for restart_of in (0, 1):
+        benchmark._record_run_started(
+            output,
+            culture_id="c1",
+            sequence_index=0,
+            conditions=["contact_skill"],
+            backend="hardware",
+            restart_of=restart_of,
+        )
+    entries = benchmark._read_run_ledger(output)
+    assert [entry["event"] for entry in entries] == [
+        "run_started",
+        "run_restarted",
+    ]
+    assert entries[1]["prior_starts"] == 1

@@ -141,10 +141,17 @@ world frame: the raw sensor reading is rotated out of the sensor frame and
 the weight of the gripper is removed, so free space reads zero and the
 deterministic retract moves away from the contact.
 
-Because partial runs stay on disk, the analysis script checks every culture
-against the frozen protocol before any gate is computed: one row per
-protocol episode, in the right phase and scenario split, with the protocol's
-hash. Any incomplete run is listed in `analysis/incomplete_runs.csv` and
+Because partial runs stay on disk, the analysis script checks every run
+(`RunID`) against the frozen protocol before any gate is computed: one row
+per protocol episode, in the right phase and scenario split, with the
+protocol's hash, and exactly one run per culture and condition, so two
+interrupted runs cannot be spliced into a complete one. Only a protocol
+marked `"confirmatory": true` in `config/cl1_protocols.json` (currently
+`senxe_contact_skill_v2`) can set a confirmatory or falsification flag; the
+22-episode application protocol is reported descriptively only. A run the
+ledger shows was already started is treated as interrupted and is not
+restarted unless `--restart-interrupted-run` is passed, which is itself
+recorded. Any incomplete run is listed in `analysis/incomplete_runs.csv` and
 blocks every confirmatory and falsification gate. Output conflicts that are
 knowable in advance (duplicate run keys, an existing donor schedule) are
 rejected before the device is opened, so a mistaken re-run never

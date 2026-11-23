@@ -89,6 +89,10 @@ class ProtocolSpec:
     controls: tuple[str, ...]
     required_recordings: tuple[str, ...]
     phases: tuple[PhaseSpec, ...]
+    # Only a protocol that declares itself confirmatory may produce a
+    # confirmatory or falsification verdict. Demonstration and reference
+    # protocols report descriptive statistics only.
+    confirmatory: bool = False
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ProtocolSpec":
@@ -119,6 +123,7 @@ class ProtocolSpec:
                 str(item) for item in value["required_recordings"]
             ),
             phases=phases,
+            confirmatory=value.get("confirmatory", False) is True,
         )
 
     def phase_for_episode(self, episode_index: int) -> PhaseSpec:
