@@ -516,6 +516,8 @@ class CL1Agent:
         self.current_protocol_phase = self.protocol.phase_for_episode(0)
         self._entered_protocol_phase = None
         self.last_rest_observation = None
+        self._training_end_monotonic = None
+        self._clock = time.monotonic
         self.artifact_wait_ms = float(
             ARTIFACT_WAIT_OVERRIDE
             if ARTIFACT_WAIT_OVERRIDE is not None
@@ -682,16 +684,38 @@ class CL1Agent:
         return spikes, firing_rates, counts
 
     def _enter_phase_and_observe_rest(self) -> None:
-        """Enforce each protocol phase's cumulative retention delay once."""
+        """Hold each retention phase until its delay from the end of training.
+
+        The protocol defines retention delays from the end of feedback
+        training (5, 15 and 45 minutes). Evaluation episodes run between
+        those points and take wall-clock time, so the wait is computed
+        against the recorded end of training, not from the moment the phase
+        is entered; otherwise the "15 minute" test would start half an hour
+        or more after training. The delay that actually elapsed is recorded,
+        including any overrun when the preceding episodes already took
+        longer than the nominal delay.
+        """
 
         phase = self.current_protocol_phase
         if self._entered_protocol_phase is phase.phase:
             return
         self._entered_protocol_phase = phase.phase
         rest_seconds = float(phase.rest_before_seconds)
+        target_seconds = float(
+            self.protocol.delay_after_training_seconds(phase.phase)
+        )
+        training_end = self._training_end_monotonic
+        elapsed = (
+            None
+            if training_end is None
+            else float(self._clock() - training_end)
+        )
         self.last_rest_observation = {
             "phase": phase.phase.value,
             "requested_seconds": rest_seconds,
+            "target_seconds_after_training": target_seconds,
+            "actual_seconds_after_training": elapsed,
+            "overrun_seconds": 0.0,
             "observed_seconds": 0.0,
             "observed_ticks": 0,
             "simulator_skipped": False,
@@ -705,18 +729,34 @@ class CL1Agent:
             self.last_rest_observation["simulator_skipped"] = True
             return
 
+        if elapsed is None:
+            # Training was not observed in this process; the only delay
+            # that can be enforced is the increment itself.
+            wait_seconds = rest_seconds
+        else:
+            wait_seconds = max(0.0, target_seconds - elapsed)
+            self.last_rest_observation["overrun_seconds"] = max(
+                0.0,
+                elapsed - target_seconds,
+            )
         observed_ticks = 0
-        started_at = time.monotonic()
-        for _ in self.neurons.loop(
-            ticks_per_second=1,
-            stop_after_seconds=rest_seconds,
-            ignore_jitter=True,
-        ):
-            observed_ticks += 1
+        started_at = self._clock()
+        if wait_seconds > 0:
+            for _ in self.neurons.loop(
+                ticks_per_second=1,
+                stop_after_seconds=wait_seconds,
+                ignore_jitter=True,
+            ):
+                observed_ticks += 1
+        finished_at = self._clock()
         self.last_rest_observation["observed_seconds"] = float(
-            time.monotonic() - started_at
+            finished_at - started_at
         )
         self.last_rest_observation["observed_ticks"] = observed_ticks
+        if training_end is not None:
+            self.last_rest_observation["actual_seconds_after_training"] = (
+                float(finished_at - training_end)
+            )
 
     def run_episode(self, max_steps=MAX_STEPS, record=False, ep_num=0):
         # Seed both numpy/random and Gym environment to guarantee exact paired layouts
@@ -1001,8 +1041,20 @@ class CL1Agent:
             episode_budget_start,
             budget_end,
         )
+        rest = self.last_rest_observation or {}
         self.last_episode_metrics = {
             **initial_layout,
+            "retention_target_seconds_after_training": (
+                rest.get("target_seconds_after_training")
+                if self.current_protocol_phase.rest_before_seconds > 0
+                else None
+            ),
+            "retention_actual_seconds_after_training": (
+                rest.get("actual_seconds_after_training")
+                if self.current_protocol_phase.rest_before_seconds > 0
+                and not rest.get("simulator_skipped")
+                else None
+            ),
             "episode_success": episode_success,
             "time_to_success_steps": time_to_success_steps,
             "step_count": len(force_history),
@@ -1044,6 +1096,10 @@ class CL1Agent:
         self.recorded_feedback_schedule[int(ep_num)] = tuple(
             episode_delivered_feedback
         )
+        if self.current_protocol_phase.phase is LearningPhase.FEEDBACK_TRAINING:
+            # Updated after every training episode, so the value left when
+            # the next phase starts is the end of the last one.
+            self._training_end_monotonic = self._clock()
         return total_reward, 0.0, frames_list, success_rate, force_safe_rate
 
     def train(self, num_episodes=EPISODES, record_last_n=RECORD_LAST_N):

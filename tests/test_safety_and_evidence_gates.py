@@ -836,3 +836,89 @@ def test_deliberate_restart_is_recorded_in_the_ledger(tmp_path):
         "run_restarted",
     ]
     assert entries[1]["prior_starts"] == 1
+
+
+# ── 10. retention delays are measured from the end of training ───────────
+
+def test_protocol_retention_targets_are_cumulative_from_training_end():
+    from core.learning_protocol import (
+        LearningPhase,
+        default_protocol_path,
+        load_protocols,
+    )
+
+    protocol = load_protocols(default_protocol_path())["senxe_contact_skill_v2"]
+    targets = [
+        protocol.delay_after_training_seconds(phase)
+        for phase in (
+            LearningPhase.FEEDBACK_TRAINING,
+            LearningPhase.FROZEN_EVALUATION,
+            LearningPhase.RETENTION_5_MIN,
+            LearningPhase.RETENTION_15_MIN,
+            LearningPhase.RETENTION_45_MIN,
+        )
+    ]
+    assert targets == [0.0, 0.0, 300.0, 900.0, 2700.0]
+
+
+def test_retention_wait_subtracts_time_already_spent_since_training(
+    monkeypatch,
+):
+    from core.learning_protocol import (
+        LearningPhase,
+        default_protocol_path,
+        load_protocols,
+    )
+
+    monkeypatch.delenv(SIMULATOR_ENV_VAR, raising=False)
+    monkeypatch.setattr(demo, "is_cl_simulator", lambda: False)
+    protocol = load_protocols(default_protocol_path())["senxe_contact_skill_v2"]
+    by_phase = {spec.phase: spec for spec in protocol.phases}
+    now = [1000.0]
+    waits = []
+
+    class _Neurons:
+        def loop(self, *, stop_after_seconds, **kwargs):
+            waits.append(stop_after_seconds)
+            now[0] += stop_after_seconds
+            return iter(range(int(stop_after_seconds)))
+
+    agent = demo.CL1Agent.__new__(demo.CL1Agent)
+    agent.protocol = protocol
+    agent.neurons = _Neurons()
+    agent._clock = lambda: now[0]
+    agent._entered_protocol_phase = None
+    agent._training_end_monotonic = 1000.0
+    agent.last_rest_observation = None
+
+    def enter(phase, evaluation_seconds):
+        # Wall-clock time taken by the 20 evaluation episodes before it.
+        now[0] += evaluation_seconds
+        agent.current_protocol_phase = by_phase[phase]
+        agent._enter_phase_and_observe_rest()
+        return dict(agent.last_rest_observation)
+
+    # 2 minutes of evaluation, then the 5 minute test: wait only 3 minutes.
+    five = enter(LearningPhase.RETENTION_5_MIN, 120.0)
+    assert waits == [180.0]
+    assert five["actual_seconds_after_training"] == pytest.approx(300.0)
+    assert five["overrun_seconds"] == 0.0
+
+    # 4 more minutes of episodes: 9 minutes elapsed, wait 6 to reach 15.
+    fifteen = enter(LearningPhase.RETENTION_15_MIN, 240.0)
+    assert waits == [180.0, 360.0]
+    assert fifteen["actual_seconds_after_training"] == pytest.approx(900.0)
+
+    # The next block overruns: 50 minutes elapsed against a 45 minute target.
+    forty_five = enter(LearningPhase.RETENTION_45_MIN, 2100.0)
+    assert waits == [180.0, 360.0]
+    assert forty_five["overrun_seconds"] == pytest.approx(300.0)
+    assert forty_five["actual_seconds_after_training"] == pytest.approx(3000.0)
+    assert forty_five["target_seconds_after_training"] == 2700.0
+
+
+def test_evidence_rows_record_the_actual_retention_delay():
+    assert {
+        "RetentionTargetSecondsAfterTraining",
+        "RetentionActualSecondsAfterTraining",
+    } <= set(benchmark.CSV_FIELDS)

@@ -121,6 +121,8 @@ CSV_FIELDS = (
     "Episode",
     "ProtocolPhase",
     "RetentionDelaySeconds",
+    "RetentionTargetSecondsAfterTraining",
+    "RetentionActualSecondsAfterTraining",
     "Scenario",
     "ScenarioSplit",
     "Reward",
@@ -559,6 +561,10 @@ def _preflight_outputs(
         )
 
 
+def _blank_if_none(value: Any) -> Any:
+    return "" if value is None else value
+
+
 def _scenario_value(agent: CL1Agent, name: str, fallback: str = "none") -> str:
     if agent.active_scenario is None:
         return fallback
@@ -663,6 +669,14 @@ def _run_condition(
                 "Episode": episode,
                 "ProtocolPhase": phase.phase.value,
                 "RetentionDelaySeconds": phase.rest_before_seconds,
+                # Blank outside retention phases and when the simulator
+                # skipped the wall-clock wait.
+                "RetentionTargetSecondsAfterTraining": _blank_if_none(
+                    metrics.get("retention_target_seconds_after_training")
+                ),
+                "RetentionActualSecondsAfterTraining": _blank_if_none(
+                    metrics.get("retention_actual_seconds_after_training")
+                ),
                 "Scenario": _scenario_value(agent, "scenario_id"),
                 "ScenarioSplit": _scenario_value(agent, "split"),
                 "Reward": reward,

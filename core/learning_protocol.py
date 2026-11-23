@@ -140,6 +140,25 @@ class ProtocolSpec:
     def total_episodes(self) -> int:
         return sum(phase.episodes for phase in self.phases)
 
+    def delay_after_training_seconds(self, target: LearningPhase) -> float:
+        """Nominal delay from the end of feedback training to ``target``.
+
+        ``rest_before_seconds`` values are increments (5 min, +10 min,
+        +30 min); the protocol defines each retention delay as their running
+        total measured from the end of training (5, 15, 45 min).
+        """
+
+        total = 0.0
+        after_training = False
+        for phase in self.phases:
+            if after_training:
+                total += phase.rest_before_seconds
+            if phase.phase is target:
+                return total if after_training else 0.0
+            if phase.phase is LearningPhase.FEEDBACK_TRAINING:
+                after_training = True
+        raise KeyError(f"phase is not present in protocol: {target.value}")
+
     def phase_start_episode(self, target: LearningPhase) -> int:
         cursor = 0
         for phase in self.phases:
