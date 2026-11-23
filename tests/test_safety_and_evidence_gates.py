@@ -922,3 +922,23 @@ def test_evidence_rows_record_the_actual_retention_delay():
         "RetentionTargetSecondsAfterTraining",
         "RetentionActualSecondsAfterTraining",
     } <= set(benchmark.CSV_FIELDS)
+
+
+# ── 11. the real cl-sdk simulator starts ─────────────────────────────────
+
+def test_real_sdk_simulator_opens_and_streams():
+    """Open the actual cl-sdk simulator, not a test double.
+
+    Every other test replaces the device. That is how a dependency set in
+    which the simulator's own subprocess crashed on start (cl-sdk 1.x on
+    NumPy 1.x) stayed green: nothing ever opened the SDK.
+    """
+
+    with cl_open() as neurons:
+        assert isinstance(neurons, BudgetedNeurons)
+        assert neurons.get_frames_per_second() > 0
+        ticks = 0
+        for tick in neurons.loop(ticks_per_second=100, stop_after_ticks=5):
+            assert tick.frames.shape[1] == 64
+            ticks += 1
+        assert ticks == 5
