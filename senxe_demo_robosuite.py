@@ -20,12 +20,15 @@ from core.channel_map import (
 )
 from core.channel_health import (
     ChannelHealthReport,
+    health_thresholds_from_env,
     require_channel_health,
     resolve_contact_channel_map,
 )
 from core.neurons import (
+    BACKEND_SIMULATOR,
     BudgetedNeurons,
     cl_open,
+    evidence_backend,
     is_cl_simulator,
     require_stimulation_approval,
     simulator_mode_hint,
@@ -110,14 +113,6 @@ MAX_STIM_AMPLITUDE_UA     = STIM_SAFETY_LIMITS.max_amplitude_ua
 MAX_STIM_CALLS            = STIM_SAFETY_LIMITS.max_stim_calls
 MAX_STIM_CHANNEL_PULSES   = STIM_SAFETY_LIMITS.max_channel_pulses
 MAX_STIM_ABS_CHARGE_NC    = STIM_SAFETY_LIMITS.max_abs_charge_nc
-MIN_INPUT_RESPONSE_DELTA   = float(os.getenv(
-    "SENXE_MIN_INPUT_RESPONSE_DELTA",
-    "0",
-))
-MIN_OUTPUT_RESPONSE_DELTA  = float(os.getenv(
-    "SENXE_MIN_OUTPUT_RESPONSE_DELTA",
-    "0",
-))
 ALLOW_CALIBRATION_REMAP    = os.getenv(
     "SENXE_ALLOW_CALIBRATION_REMAP",
     "0",
@@ -184,8 +179,11 @@ def extract_obs(obs, raw_env=None):
         trq_raw = robot.ee_torque
         frc = frc_raw["right"] if isinstance(frc_raw, dict) and "right" in frc_raw else frc_raw
         trq = trq_raw["right"] if isinstance(trq_raw, dict) and "right" in trq_raw else trq_raw
-        frc = np.array(frc).flatten()[:3]
-        trq = np.array(trq).flatten()[:3]
+        frc, trq = _ee_wrench_in_world_frame(
+            raw_env,
+            np.array(frc, dtype=float).flatten()[:3],
+            np.array(trq, dtype=float).flatten()[:3],
+        )
         eef = np.array(eef).flatten()[:3]
         vel = np.array(vel).flatten()[:3]
         jnt = raw_env.robots[0]._joint_positions
@@ -275,6 +273,45 @@ def extract_obs(obs, raw_env=None):
         )
     except Exception as e:
         raise RuntimeError(f"Failed to extract observation from raw_env: {e}") from e
+
+def _ee_wrench_in_world_frame(raw_env, sensor_force, sensor_torque):
+    """Rotate the wrist force/torque reading into the world frame and tare it.
+
+    RoboSuite's ``ee_force`` / ``ee_torque`` are raw MuJoCo sensor readings
+    expressed in the wrist sensor site frame, and the force includes the
+    weight of everything mounted below the sensor. The controller writes
+    Cartesian actions in the world-aligned base frame, so using the raw
+    reading as a direction makes the "retract away from contact" command
+    point the wrong way and makes free space look like contact.
+
+    The returned force is the contact force in the world frame: rotated by
+    the sensor site orientation and with the static weight of the sensed
+    subtree removed. The torque is only rotated; its gravity term depends on
+    the gripper orientation and is left in. Any lookup failure raises, so a
+    wrench that cannot be interpreted never reaches the force supervisor.
+    """
+
+    robot = raw_env.robots[0]
+    gripper = robot.gripper
+    if isinstance(gripper, dict):
+        arms = getattr(robot, "arms", None) or list(gripper)
+        gripper = gripper[arms[0]]
+    sensor_name = gripper.important_sensors["force_ee"]
+    model = raw_env.sim.model
+    data = raw_env.sim.data
+    sensor_id = int(model.sensor_name2id(sensor_name))
+    site_id = int(np.asarray(model.sensor_objid)[sensor_id])
+    rotation = np.asarray(
+        data.site_xmat[site_id],
+        dtype=float,
+    ).reshape(3, 3)
+    body_id = int(np.asarray(model.site_bodyid)[site_id])
+    sensed_mass = float(np.asarray(model.body_subtreemass)[body_id])
+    gravity = np.asarray(model.opt.gravity, dtype=float).flatten()[:3]
+    force = rotation @ np.asarray(sensor_force, dtype=float) + sensed_mass * gravity
+    torque = rotation @ np.asarray(sensor_torque, dtype=float)
+    return force, torque
+
 
 def _square_nut_grasp_confirmed(raw_env) -> bool:
     """Return RoboSuite's contact-based grasp result for the active square nut."""
@@ -416,7 +453,9 @@ class CL1Agent:
         self.channel_map = channel_map or DEFAULT_CONTACT_CHANNEL_MAP
         self.channel_map_metadata = channel_map_metadata(self.channel_map)
         self.channel_health_report = channel_health_report
+        self.backend = evidence_backend()
         self.experiment_metadata = {
+            "backend": self.backend,
             **dict(experiment_metadata or {}),
             **self.channel_map_metadata,
             "channel_health_report": (
@@ -508,11 +547,15 @@ class CL1Agent:
                 contact_channels=self.channel_map.contact_channels,
             ),
         )
-        resp_weights = responsiveness if channel_ranking is not None else None
+        # The protocol declares a fixed zero-bias count readout. Calibration
+        # responsiveness therefore never weights the decoder (unequal
+        # weights inside an antagonistic pair are a constant sign bias that
+        # could be mistaken for skill), and there is no cross-step EMA state.
         self.contact_decoder = AntagonisticDecoder(
             CONTACT_SKILL_DIM,
+            ema_alpha=1.0,
             action_scale=1.0,
-            channel_weights=resp_weights,
+            channel_weights=None,
             channel_groups=self.channel_map.decoder_groups(),
         )
         self.decoder = self.contact_decoder
@@ -588,6 +631,11 @@ class CL1Agent:
         real_spikes = list(set(np.where(abs_frames > threshold)[1]))
         firing_rates = np.mean(abs_frames, axis=0)
         
+        if self.ablation_spike_mode == "shuffled":
+            raise RuntimeError(
+                "The shuffled-spike control is not implemented for the "
+                "legacy_voltage pipeline; use the timestamped pipeline"
+            )
         if self.ablation_spike_mode == "zero":
             spikes = []
         elif self.ablation_spike_mode == "random":
@@ -697,6 +745,15 @@ class CL1Agent:
                 for event in sensory_stim_events
                 if event["timestamp"] is not None
             )
+            if (
+                len(trigger_stim_timestamps) != len(sensory_stim_events)
+                and not is_cl_simulator()
+            ):
+                raise RuntimeError(
+                    "A stimulation delivered in this control step has no "
+                    "device timestamp; the response-window timing gate "
+                    "cannot be enforced"
+                )
             spikes, cur_fr, spike_counts = self._detect_spikes(
                 trigger_stim_timestamps
             )
@@ -949,7 +1006,7 @@ class CL1Agent:
 
     def train(self, num_episodes=EPISODES, record_last_n=RECORD_LAST_N):
         print("\n" + "=" * 60)
-        mode_str = "Simulator Mode" if is_cl_simulator() else "Pure Wetware Mode"
+        mode_str = "Simulator Mode" if is_cl_simulator() else "Real CL1 Hardware Mode"
         print("  CL1 Bio-Computer Training (" + mode_str + ")")
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
@@ -995,22 +1052,21 @@ def main():
     hud.reset()
     print("+" + "=" * 58 + "+")
     if is_cl_simulator():
-        print("|  Senxe Cerebellum v5.0 — cl-sdk Simulator Mode            |")
-        print("|  [!] WARNING: Real CL1 hardware not detected.             |")
-        print("|      Falling back to official cl-sdk Poisson simulation.  |")
+        print("|  Senxe Cerebellum v5.1 — cl-sdk Simulator Mode            |")
+        print("|  [!] SENXE_SIMULATOR=1: replayed recordings, no culture.  |")
+        print("|      Nothing from this run is biological evidence.        |")
     else:
-        print("|  Senxe Cerebellum v5.0 — Bounded Contact Skill            |")
+        print("|  Senxe Cerebellum v5.1 — Bounded Contact Skill            |")
     print("+" + "=" * 58 + "+\n")
 
     print("-" * 60)
     print("  Phase 0: Channel Warm-up Calibration")
     print("-" * 60)
-    with cl_open() as neurons:
-        require_stimulation_approval()
+    with cl_open(STIM_SAFETY_LIMITS) as experiment_neurons:
         require_hardware_evidence_recording()
-        experiment_neurons = BudgetedNeurons(
-            neurons,
-            safety_limits=STIM_SAFETY_LIMITS,
+        backend = evidence_backend()
+        input_z_threshold, output_z_threshold = health_thresholds_from_env(
+            simulator=backend == BACKEND_SIMULATOR,
         )
         calibration_recorder = CLSessionRecorder(
             experiment_neurons,
@@ -1022,6 +1078,7 @@ def main():
             attributes={
                 "protocol_id": PROTOCOL_ID,
                 "stage": "timestamped_calibration",
+                "backend": backend,
                 **base_provenance,
             },
         )
@@ -1043,10 +1100,10 @@ def main():
                 max_stim_amplitude=MAX_STIM_AMPLITUDE_UA,
             )
             resolved_map, health_report = resolve_contact_channel_map(
-                calibration.input_responsiveness,
-                calibration.output_responsiveness,
-                input_threshold=MIN_INPUT_RESPONSE_DELTA,
-                output_threshold=MIN_OUTPUT_RESPONSE_DELTA,
+                calibration.input_response_z,
+                calibration.output_response_z,
+                input_threshold=input_z_threshold,
+                output_threshold=output_z_threshold,
                 allow_reserve_remap=ALLOW_CALIBRATION_REMAP,
             )
             if not is_cl_simulator():

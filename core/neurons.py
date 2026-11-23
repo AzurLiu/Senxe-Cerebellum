@@ -1,7 +1,8 @@
 """
 Senxe Cerebellum — Neural Interface Module
 ========================================
-CL1 biological neural interface: Pure hardware mode.
+CL1 neural interface. Real hardware by default; the cl-sdk replay
+simulator only when the operator sets SENXE_SIMULATOR=1.
 
 This module provides the hardware abstraction layer for interfacing with
 Cortical Labs CL1 biological neural organoids on a 64-channel MEA.
@@ -98,6 +99,30 @@ def is_cl_simulator() -> bool:
             "real CL1 device without hardware safety gates."
         )
     return True
+
+
+BACKEND_SIMULATOR = "simulator"
+BACKEND_HARDWARE = "hardware"
+
+
+def evidence_backend() -> str:
+    """Return the backend label that every evidence record must carry.
+
+    ``simulator`` only when the operator selected simulator mode. Otherwise
+    the run is labelled ``hardware``, and that label is refused when the
+    installed CL SDK looks like the replay simulator: replayed recordings
+    must never be written to disk as real-culture evidence.
+    """
+
+    if is_cl_simulator():
+        return BACKEND_SIMULATOR
+    if sdk_reports_simulator():
+        raise RuntimeError(
+            "The installed CL SDK looks like the replay simulator, but "
+            f"{SIMULATOR_ENV_VAR}=1 was not set. Refusing to record "
+            "simulator output as real CL1 hardware evidence."
+        )
+    return BACKEND_HARDWARE
 
 
 def simulator_mode_hint() -> str:
@@ -243,6 +268,11 @@ class BudgetedNeurons:
                     else int(max_channel_pulses)
                 ),
             )
+        if isinstance(neurons, BudgetedNeurons):
+            raise TypeError(
+                "neurons is already a BudgetedNeurons proxy; reuse it so "
+                "the cumulative dose is counted once"
+            )
         self._neurons = neurons
         self.safety_limits = safety_limits
         self.max_stim_calls = int(safety_limits.max_stim_calls)
@@ -357,6 +387,15 @@ class BudgetedNeurons:
         self.channel_pulses = proposed_channel_pulses
         self.abs_charge_nc = proposed_abs_charge_nc
         self.last_stim_timestamp = _safe_neuron_timestamp(self._neurons)
+        if self.last_stim_timestamp is None and not is_cl_simulator():
+            # Without the device timestamp the artifact-exclusion interval
+            # of the following response window cannot be verified. Stop
+            # instead of letting an unverifiable window reach the decoder.
+            raise RuntimeError(
+                "CL1 stimulation was delivered but its device timestamp "
+                "could not be read; the response-window timing gate cannot "
+                "be enforced, so the run stops here"
+            )
         self.last_stim_event = {
             "sequence": self.stim_calls,
             "timestamp": self.last_stim_timestamp,
@@ -393,6 +432,16 @@ class BudgetedNeurons:
         )
 
     def __getattr__(self, name):
+        # Only ``stim`` is audited. Any other SDK entry point that can
+        # deliver or schedule current (``interrupt_then_stim``,
+        # ``create_stim_plan``, ``stimulate``...) would bypass the channel,
+        # amplitude, charge-balance and cumulative-dose checks above.
+        lowered = str(name).lower()
+        if "stim" in lowered and not name.startswith("_"):
+            raise AttributeError(
+                f"{name!r} is not available through BudgetedNeurons: only "
+                "the audited stim() call may deliver stimulation"
+            )
         return getattr(self._neurons, name)
 
 
@@ -441,10 +490,21 @@ def _safe_neuron_timestamp(neurons: Any) -> int | None:
         return None
 
 @contextmanager
-def cl_open():
-    """Unified CL1 entry point: connects to real Cortical Labs biological hardware."""
+def cl_open(safety_limits: StimSafetyLimits | None = None):
+    """Single CL1 entry point for every script in this project.
+
+    Runs the laboratory approval gate and the backend-label check before the
+    device is opened, and yields the audited ``BudgetedNeurons`` proxy, never
+    the raw SDK object. Code that opens the device through this function
+    cannot stimulate a non-stimulatable channel, exceed the approved
+    electrical envelope, or skip dose accounting.
+    """
+
+    require_stimulation_approval()
+    evidence_backend()
+    limits = safety_limits or stimulation_limits_from_env()
     with _cl_sdk.open() as neurons:
-        yield neurons
+        yield BudgetedNeurons(neurons, safety_limits=limits)
 
 def warmup_calibration(
     neurons,
@@ -462,7 +522,7 @@ def warmup_calibration(
         channel_ranking: Indices sorted by responsiveness.
         responsiveness: Response delta (evoked - baseline).
     """
-    print("  [Calibration] Channel warm-up calibrating on real biology...")
+    print("  [Calibration] Channel warm-up calibration...")
     n_rounds = int(duration_sec * 250)  # 10s * 250 rounds of 100 frames @ 25kHz = 250,000 frames
     baseline_rounds = n_rounds // 2
     stim_rounds = n_rounds - baseline_rounds
@@ -523,6 +583,13 @@ class TimestampedCalibrationResult:
     input_responsiveness: np.ndarray
     baseline_counts: np.ndarray
     evoked_counts_by_input: np.ndarray
+    # Standardized versions used by the channel-health gate. Each is the
+    # evoked-minus-baseline difference divided by its standard error, so a
+    # threshold on them has a stated false-positive rate.
+    input_response_z: np.ndarray
+    output_response_z: np.ndarray
+    probe_repeats: int = 1
+    baseline_windows: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -531,6 +598,10 @@ class TimestampedCalibrationResult:
             "input_responsiveness": self.input_responsiveness.tolist(),
             "baseline_counts": self.baseline_counts.tolist(),
             "evoked_counts_by_input": self.evoked_counts_by_input.tolist(),
+            "input_response_z": self.input_response_z.tolist(),
+            "output_response_z": self.output_response_z.tolist(),
+            "probe_repeats": int(self.probe_repeats),
+            "baseline_windows": int(self.baseline_windows),
         }
 
 
@@ -541,8 +612,18 @@ def timestamped_contact_calibration(
     artifact_wait_ms: float = 50.0,
     collect_window_ms: float = 50.0,
     max_stim_amplitude: float = 0.75,
+    probe_repeats: int = 5,
 ) -> TimestampedCalibrationResult:
-    """Measure per-input efficacy and per-output response using CL timestamps."""
+    """Measure per-input efficacy and per-output response using CL timestamps.
+
+    Every stimulatable electrode is probed ``probe_repeats`` times, in
+    interleaved rounds. ``input_responsiveness`` is the signed mean change in
+    whole-array spike count after probing that electrode (not a rectified
+    sum, which is positive for pure noise). ``output_responsiveness`` is the
+    mean change on each recording electrode across all probes. The ``*_z``
+    fields divide those differences by their standard error estimated from
+    the baseline windows, with a Poisson floor.
+    """
 
     from core.spike_pipeline import SpikeWindowConfig, SpikeWindowReader
 
@@ -556,15 +637,21 @@ def timestamped_contact_calibration(
             tick_ms=10.0,
         ),
     )
+    probe_repeats = int(probe_repeats)
+    if probe_repeats < 1:
+        raise ValueError("probe_repeats must be at least 1")
     baseline_window_count = max(3, int(max(duration_sec, 0.1) * 5))
-    baseline_counts = np.zeros(64, dtype=np.float64)
-    for _ in range(baseline_window_count):
+    baseline_windows = np.zeros(
+        (baseline_window_count, 64),
+        dtype=np.float64,
+    )
+    for index in range(baseline_window_count):
         window = reader.read()
-        baseline_counts += np.asarray(
+        baseline_windows[index] = np.asarray(
             window.features.channel_counts,
             dtype=np.float64,
         )
-    baseline_counts /= baseline_window_count
+    baseline_counts = baseline_windows.mean(axis=0)
 
     if max_stim_amplitude <= 0:
         raise ValueError("max_stim_amplitude must be positive")
@@ -576,33 +663,76 @@ def timestamped_contact_calibration(
         probe_amplitude,
     )
     evoked_counts_by_input = np.zeros((64, 64), dtype=np.float64)
-    input_responsiveness = np.zeros(64, dtype=np.float64)
-    for input_channel in STIMULATABLE_CHANNELS:
-        neurons.stim(
-            ChannelSet(input_channel),
-            probe,
-            BurstDesign(1, 50),
-        )
-        trigger_timestamp = getattr(neurons, "last_stim_timestamp", None)
-        window = reader.read(
-            trigger_stim_timestamps=(
-                ()
-                if trigger_timestamp is None
-                else (int(trigger_timestamp),)
-            ),
-        )
-        counts = np.asarray(
-            window.features.channel_counts,
-            dtype=np.float64,
-        )
-        evoked_counts_by_input[input_channel] = counts
-        input_responsiveness[input_channel] = float(np.sum(
-            np.maximum(counts - baseline_counts, 0.0)
-        ))
+    simulator = is_cl_simulator()
+    for _ in range(probe_repeats):
+        for input_channel in STIMULATABLE_CHANNELS:
+            neurons.stim(
+                ChannelSet(input_channel),
+                probe,
+                BurstDesign(1, 50),
+            )
+            trigger_timestamp = getattr(neurons, "last_stim_timestamp", None)
+            if trigger_timestamp is None and not simulator:
+                raise RuntimeError(
+                    "Calibration probe has no device timestamp; the "
+                    "artifact-exclusion interval cannot be verified"
+                )
+            window = reader.read(
+                trigger_stim_timestamps=(
+                    ()
+                    if trigger_timestamp is None
+                    else (int(trigger_timestamp),)
+                ),
+            )
+            if (
+                trigger_timestamp is not None
+                and not simulator
+                and window.timing_valid is not True
+            ):
+                raise RuntimeError(
+                    "Calibration response window failed the "
+                    "stimulation-to-collection timing gate"
+                )
+            evoked_counts_by_input[input_channel] += np.asarray(
+                window.features.channel_counts,
+                dtype=np.float64,
+            )
+    evoked_counts_by_input /= probe_repeats
 
-    valid_rows = evoked_counts_by_input[list(STIMULATABLE_CHANNELS)]
+    stimulatable = list(STIMULATABLE_CHANNELS)
+    baseline_total = baseline_windows.sum(axis=1)
+    total_sd = max(
+        float(np.std(baseline_total, ddof=1)),
+        float(np.sqrt(max(baseline_total.mean(), 0.0))),
+        1.0 / np.sqrt(baseline_window_count),
+    )
+    input_responsiveness = np.zeros(64, dtype=np.float64)
+    input_response_z = np.zeros(64, dtype=np.float64)
+    input_se = total_sd * np.sqrt(
+        1.0 / probe_repeats + 1.0 / baseline_window_count
+    )
+    for input_channel in stimulatable:
+        delta = float(
+            evoked_counts_by_input[input_channel].sum()
+            - baseline_total.mean()
+        )
+        input_responsiveness[input_channel] = delta
+        input_response_z[input_channel] = delta / input_se
+
+    valid_rows = evoked_counts_by_input[stimulatable]
     mean_evoked_counts = np.mean(valid_rows, axis=0)
     output_responsiveness = mean_evoked_counts - baseline_counts
+    channel_sd = np.maximum.reduce([
+        np.std(baseline_windows, axis=0, ddof=1),
+        np.sqrt(np.maximum(baseline_counts, 0.0)),
+        np.full(64, 1.0 / np.sqrt(baseline_window_count)),
+    ])
+    output_response_z = output_responsiveness / (
+        channel_sd * np.sqrt(
+            1.0 / (len(stimulatable) * probe_repeats)
+            + 1.0 / baseline_window_count
+        )
+    )
     channel_ranking = np.argsort(output_responsiveness)[::-1]
     top8 = channel_ranking[:8]
     print(
@@ -616,6 +746,10 @@ def timestamped_contact_calibration(
         input_responsiveness=input_responsiveness,
         baseline_counts=baseline_counts,
         evoked_counts_by_input=evoked_counts_by_input,
+        input_response_z=input_response_z,
+        output_response_z=output_response_z,
+        probe_repeats=probe_repeats,
+        baseline_windows=baseline_window_count,
     )
 
 

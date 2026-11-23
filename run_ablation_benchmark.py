@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,6 +22,7 @@ from tqdm import tqdm
 
 from core.channel_health import (
     ChannelHealthReport,
+    health_thresholds_from_env,
     require_channel_health,
     resolve_contact_channel_map,
 )
@@ -28,10 +30,9 @@ from core.channel_map import ContactChannelMap, channel_map_metadata
 from core.learning_protocol import default_protocol_path, load_protocols
 from core.provenance import project_provenance
 from core.neurons import (
-    BudgetedNeurons,
     cl_open,
-    is_cl_simulator,
-    require_stimulation_approval,
+    BACKEND_SIMULATOR,
+    evidence_backend,
     simulator_mode_hint,
     timestamped_contact_calibration,
 )
@@ -48,8 +49,6 @@ from senxe_demo_robosuite import (
     MAX_STIM_ABS_CHARGE_NC,
     MAX_STIM_CALLS,
     MAX_STIM_CHANNEL_PULSES,
-    MIN_INPUT_RESPONSE_DELTA,
-    MIN_OUTPUT_RESPONSE_DELTA,
     ALLOW_CALIBRATION_REMAP,
     RECORD_CL_SESSION,
     RECORDING_LOCATION,
@@ -107,6 +106,7 @@ CONDITION_BY_NAME = {
 }
 CSV_FIELDS = (
     "RunID",
+    "Backend",
     "CultureID",
     "SequenceIndex",
     "ConditionOrder",
@@ -254,29 +254,37 @@ def _validate_hardware_scope(args: argparse.Namespace, simulator: bool) -> None:
             "Real CL1 ablations require SENXE_RECORD_SESSION=1."
             + simulator_mode_hint()
         )
+    prior_conditions: set[str] = set()
     if args.output.exists() and args.output.stat().st_size > 0:
         with args.output.open(newline="", encoding="utf-8") as handle:
             prior_rows = list(csv.DictReader(handle))
-        prior_conditions = {
+        prior_conditions |= {
             str(row.get("Condition", ""))
             for row in prior_rows
             if str(row.get("CultureID", "")) == args.culture_id
         }
-        requested_conditions = (
-            set(CONDITION_BY_NAME)
-            if args.condition == "all"
-            else {args.condition}
+    # Runs that started but crashed before writing any episode row still
+    # stimulated the culture; the ledger keeps them visible here.
+    for entry in _read_run_ledger(args.output):
+        if str(entry.get("culture_id", "")) == args.culture_id:
+            prior_conditions |= {
+                str(name) for name in entry.get("conditions", [])
+            }
+    requested_conditions = (
+        set(CONDITION_BY_NAME)
+        if args.condition == "all"
+        else {args.condition}
+    )
+    if (
+        prior_conditions
+        and len(prior_conditions | requested_conditions) > 1
+        and not args.allow_hardware_crossover
+    ):
+        raise RuntimeError(
+            "This culture ID already appears under another condition; "
+            "allocate an independent culture or use an explicitly "
+            "approved crossover design"
         )
-        if (
-            prior_conditions
-            and len(prior_conditions | requested_conditions) > 1
-            and not args.allow_hardware_crossover
-        ):
-            raise RuntimeError(
-                "This culture ID already appears under another condition; "
-                "allocate an independent culture or use an explicitly "
-                "approved crossover design"
-            )
     if args.condition == "all" and not args.allow_hardware_crossover:
         raise RuntimeError(
             "Real CL1 runs default to one condition per culture invocation. "
@@ -375,6 +383,7 @@ def _validate_append_rows(
                 "Refusing to append duplicate run / condition / episode rows"
             )
         for field in (
+            "Backend",
             "CodeHash",
             "ProtocolHash",
             "ChannelMapHash",
@@ -407,6 +416,57 @@ def _append_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         if write_header:
             writer.writeheader()
         writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def run_ledger_path(output: Path) -> Path:
+    """Sidecar file listing every run that was started against a culture."""
+
+    return output.with_name(output.name + ".runs.jsonl")
+
+
+def _read_run_ledger(output: Path) -> list[dict[str, Any]]:
+    path = run_ledger_path(output)
+    if not path.exists():
+        return []
+    entries = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                entries.append(json.loads(line))
+    return entries
+
+
+def _record_run_started(
+    output: Path,
+    *,
+    culture_id: str,
+    sequence_index: int,
+    conditions: list[str],
+    backend: str,
+) -> None:
+    """Durably note that a culture is about to be stimulated.
+
+    Written before calibration delivers the first pulse, so a run that
+    crashes before its first episode row still blocks reuse of the culture
+    under another condition.
+    """
+
+    path = run_ledger_path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "event": "run_started",
+        "culture_id": culture_id,
+        "sequence_index": int(sequence_index),
+        "conditions": list(conditions),
+        "backend": backend,
+        "started_at_unix": time.time(),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _scenario_value(agent: CL1Agent, name: str, fallback: str = "none") -> str:
@@ -427,6 +487,8 @@ def _run_condition(
     channel_map: ContactChannelMap,
     channel_health_report: ChannelHealthReport,
     provenance: Mapping[str, str] | None = None,
+    backend: str,
+    on_feedback_schedule: Any = None,
 ) -> tuple[list[dict[str, Any]], FeedbackSchedule]:
     condition = CONDITION_BY_NAME[condition_name]
     provenance = dict(provenance or project_provenance(
@@ -440,6 +502,7 @@ def _run_condition(
 
     env, raw_env = make_robosuite_env(render=False)
     agent: CL1Agent | None = None
+    completed = False
     try:
         run_id = (
             f"{args.culture_id}:seq{args.sequence_index}:{condition_name}"
@@ -465,6 +528,7 @@ def _run_condition(
                 "sequence_index": args.sequence_index,
                 "condition": condition_name,
                 "condition_order": condition_order,
+                "backend": backend,
                 **provenance,
                 "file_suffix": (
                     f"{args.culture_id}_seq{args.sequence_index}"
@@ -490,6 +554,7 @@ def _run_condition(
             phase = agent.current_protocol_phase
             row = {
                 "RunID": run_id,
+                "Backend": backend,
                 "CultureID": args.culture_id,
                 "SequenceIndex": args.sequence_index,
                 "ConditionOrder": "|".join(condition_order),
@@ -595,6 +660,9 @@ def _run_condition(
                     else ""
                 ),
             }
+            # Every episode is durable before the next one stimulates the
+            # culture: a later crash must not erase delivered-dose evidence.
+            _append_rows(args.output, [row])
             rows.append(row)
             progress.set_postfix(
                 R=f"{reward:.2f}",
@@ -602,9 +670,12 @@ def _run_condition(
                 FSR=f"{force_safe_rate:.0f}%",
                 phase=phase.phase.value,
             )
+        completed = True
         return rows, dict(agent.recorded_feedback_schedule)
     finally:
         if agent is not None:
+            if not completed and on_feedback_schedule is not None:
+                on_feedback_schedule(dict(agent.recorded_feedback_schedule))
             agent.session_recorder.stop()
         env.close()
 
@@ -625,13 +696,23 @@ def main() -> None:
         else {}
     )
 
-    with cl_open() as neurons:
-        simulator = is_cl_simulator()
+    with cl_open(STIM_SAFETY_LIMITS) as experiment_neurons:
+        backend = evidence_backend()
+        simulator = backend == BACKEND_SIMULATOR
         _validate_hardware_scope(args, simulator)
-        require_stimulation_approval()
-        experiment_neurons = BudgetedNeurons(
-            neurons,
-            safety_limits=STIM_SAFETY_LIMITS,
+        input_z_threshold, output_z_threshold = health_thresholds_from_env(
+            simulator=simulator,
+        )
+        _validate_append_rows(
+            args.output,
+            [{"RunID": "", "Condition": "", "Episode": "", "Backend": backend}],
+        )
+        _record_run_started(
+            args.output,
+            culture_id=args.culture_id,
+            sequence_index=args.sequence_index,
+            conditions=selected,
+            backend=backend,
         )
         calibration_recorder = CLSessionRecorder(
             experiment_neurons,
@@ -646,6 +727,7 @@ def main() -> None:
             attributes={
                 "protocol_id": BENCHMARK_PROTOCOL_ID,
                 "stage": "timestamped_calibration",
+                "backend": backend,
                 "culture_id": args.culture_id,
                 "sequence_index": args.sequence_index,
                 "max_stim_amplitude_ua": MAX_STIM_AMPLITUDE_UA,
@@ -667,10 +749,10 @@ def main() -> None:
                 max_stim_amplitude=MAX_STIM_AMPLITUDE_UA,
             )
             resolved_map, health_report = resolve_contact_channel_map(
-                calibration.input_responsiveness,
-                calibration.output_responsiveness,
-                input_threshold=MIN_INPUT_RESPONSE_DELTA,
-                output_threshold=MIN_OUTPUT_RESPONSE_DELTA,
+                calibration.input_response_z,
+                calibration.output_response_z,
+                input_threshold=input_z_threshold,
+                output_threshold=output_z_threshold,
                 allow_reserve_remap=ALLOW_CALIBRATION_REMAP,
             )
             if not simulator:
@@ -734,6 +816,7 @@ def main() -> None:
                         "RunID": planned_run_id,
                         "Condition": condition_name,
                         "Episode": episode,
+                        "Backend": backend,
                         "CodeHash": provenance["code_hash"],
                         "ProtocolHash": provenance["protocol_hash"],
                         "ChannelMapHash": provenance["channel_map_hash"],
@@ -753,8 +836,33 @@ def main() -> None:
                         "Refusing to overwrite an existing donor feedback "
                         f"schedule: {schedule_path}"
                     )
-            rows, recorded_schedule = _run_condition(
+            def _save_partial_schedule(partial_schedule) -> None:
+                # A crashed donor run is not a valid donor. It is kept under
+                # a different name and condition label so it stays on disk
+                # as evidence but can never be loaded for a yoked recipient.
+                if condition_name != "contact_skill" or not partial_schedule:
+                    return
+                partial_path = args.feedback_output_dir / (
+                    f"{args.culture_id}_seq{args.sequence_index}"
+                    f"_contact_skill_incomplete_{int(time.time())}.json"
+                )
+                save_feedback_schedule(
+                    partial_path,
+                    partial_schedule,
+                    metadata={
+                        "culture_id": args.culture_id,
+                        "sequence_index": args.sequence_index,
+                        "condition": "contact_skill_incomplete",
+                        "protocol_id": BENCHMARK_PROTOCOL_ID,
+                        "backend": backend,
+                        **provenance,
+                    },
+                )
+
+            _, recorded_schedule = _run_condition(
                 args=args,
+                backend=backend,
+                on_feedback_schedule=_save_partial_schedule,
                 neurons=experiment_neurons,
                 ranking=ranking,
                 responsiveness=responsiveness,
@@ -775,13 +883,13 @@ def main() -> None:
                         "sequence_index": args.sequence_index,
                         "condition": condition_name,
                         "protocol_id": BENCHMARK_PROTOCOL_ID,
+                        "backend": backend,
                         **provenance,
                     },
                 )
                 if simulator and not yoked_schedule:
                     yoked_schedule = recorded_schedule
                 print(f"Donor feedback schedule: {schedule_path}")
-            _append_rows(args.output, rows)
 
     print(f"Benchmark rows appended to {args.output}")
 

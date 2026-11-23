@@ -53,6 +53,7 @@ def main() -> None:
     if not rows:
         raise RuntimeError("ablation input contains no rows")
     required_fields = {
+        "Backend",
         "ChannelMapHash",
         "ChannelMapVersion",
         "ChannelHealthReport",
@@ -86,6 +87,16 @@ def main() -> None:
             "StimSafetyLimits",
         )
     )
+    backends = {str(row["Backend"]).strip() for row in rows}
+    if not backends <= {"hardware", "simulator"}:
+        raise RuntimeError(
+            "Ablation input has rows without a valid Backend label: "
+            + ", ".join(sorted(backends))
+        )
+    # Simulator replays contain no stimulation-responsive plasticity. They
+    # can exercise the software, but they can never satisfy a confirmatory
+    # or falsification gate.
+    hardware_evidence = backends == {"hardware"}
     conditions_by_culture: dict[str, set[str]] = {}
     for row in rows:
         conditions_by_culture.setdefault(
@@ -127,8 +138,10 @@ def main() -> None:
                     independent_culture_design
                 ),
                 "ProvenanceConsistent": int(provenance_consistent),
+                "Backend": "|".join(sorted(backends)),
                 "ConfirmatoryValid": int(
-                    independent_culture_design
+                    hardware_evidence
+                    and independent_culture_design
                     and provenance_consistent
                     and estimate.biological_replicates
                     >= MIN_CONFIRMATORY_CULTURES
@@ -196,10 +209,12 @@ def main() -> None:
                     independent_culture_design
                 ),
                 "ProvenanceConsistent": int(provenance_consistent),
+                "Backend": "|".join(sorted(backends)),
                 # Preregistered superiority plus a 5 percentage-point
                 # force-safety non-inferiority margin.
                 "PassesFalsificationGate": int(
                     valid
+                    and hardware_evidence
                     and independent_culture_design
                     and provenance_consistent
                     and success_difference.biological_replicates

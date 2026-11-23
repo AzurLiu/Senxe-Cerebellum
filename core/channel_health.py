@@ -218,6 +218,53 @@ def resolve_contact_channel_map(
     )
 
 
+INPUT_Z_ENV_VAR = "SENXE_MIN_INPUT_RESPONSE_Z"
+OUTPUT_Z_ENV_VAR = "SENXE_MIN_OUTPUT_RESPONSE_Z"
+_RETIRED_THRESHOLD_ENV_VARS = (
+    "SENXE_MIN_INPUT_RESPONSE_DELTA",
+    "SENXE_MIN_OUTPUT_RESPONSE_DELTA",
+)
+
+
+def health_thresholds_from_env(*, simulator: bool) -> tuple[float, float]:
+    """Return the (input, output) z-score thresholds for the health gate.
+
+    The gate compares standardized calibration responses, so its thresholds
+    are z-scores. Real hardware has no default: with a threshold of zero a
+    dead input electrode passes about half the time and a healthy 20-channel
+    motor map almost never passes, so the supervising laboratory must freeze
+    both values before the run. The simulator, where the gate is not
+    enforced, falls back to zero.
+    """
+
+    import os
+
+    retired = [
+        name for name in _RETIRED_THRESHOLD_ENV_VARS
+        if os.getenv(name, "").strip()
+    ]
+    if retired:
+        raise RuntimeError(
+            ", ".join(retired) + " are retired: the health gate now uses "
+            f"standardized responses. Set {INPUT_Z_ENV_VAR} and "
+            f"{OUTPUT_Z_ENV_VAR} instead."
+        )
+    raw = {
+        name: os.getenv(name, "").strip()
+        for name in (INPUT_Z_ENV_VAR, OUTPUT_Z_ENV_VAR)
+    }
+    missing = [name for name, value in raw.items() if not value]
+    if missing and not simulator:
+        raise RuntimeError(
+            "Real CL1 runs require explicit, pre-frozen channel-health "
+            "thresholds: " + ", ".join(missing)
+        )
+    values = tuple(float(value) if value else 0.0 for value in raw.values())
+    if not all(np.isfinite(value) for value in values):
+        raise ValueError("channel-health thresholds must be finite")
+    return values[0], values[1]
+
+
 def require_channel_health(report: ChannelHealthReport) -> None:
     """Fail before task execution when the calibrated map is not viable."""
 
