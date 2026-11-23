@@ -29,7 +29,7 @@ verification and hard force safety remain deterministic.
 | Safety | Fail-closed stimulation and cumulative-dose enforcement |
 | Evidence | Software, simulator and main-loop integration tests |
 | Automated tests | run in GitHub Actions on every push (`pytest tests/`) |
-| CL SDK compatibility | 0.1.x and 1.x simulator metadata |
+| CL SDK compatibility | cl-sdk 1.x with NumPy 2 (the simulator is opened for real in the test suite); 0.1.x metadata is still recognized |
 | Real CL1 learning | Not yet tested |
 | Physical robot driver | Not implemented |
 

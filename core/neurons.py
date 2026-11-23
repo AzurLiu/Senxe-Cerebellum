@@ -17,20 +17,11 @@ import numpy as np
 from contextlib import contextmanager
 from typing import Any, Tuple
 
-import warnings
 
 from core.channel_map import (
     NON_STIMULATABLE_CHANNELS,
     STIMULATABLE_CHANNELS,
 )
-
-# Compatibility shim: cl-sdk uses np.bool which was removed in numpy 2.0
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", category=FutureWarning)
-    if not hasattr(np, 'bool'):
-        np.bool = np.bool_
-if not hasattr(np, 'concat'):
-    np.concat = np.concatenate
 
 try:
     import cl as _cl_sdk
