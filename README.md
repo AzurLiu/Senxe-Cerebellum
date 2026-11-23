@@ -28,7 +28,7 @@ verification and hard force safety remain deterministic.
 | Channel allocation | Fixed 18 sensory / 20 motor / 6 feedback / 15 reserve |
 | Safety | Fail-closed stimulation and cumulative-dose enforcement |
 | Evidence | Software, simulator and main-loop integration tests |
-| Automated tests | 96 passing locally and in GitHub Actions |
+| Automated tests | run in GitHub Actions on every push (`pytest tests/`) |
 | CL SDK compatibility | 0.1.x and 1.x simulator metadata |
 | Real CL1 learning | Not yet tested |
 | Physical robot driver | Not implemented |
@@ -113,12 +113,59 @@ Before every SDK stimulation call, the proxy verifies:
 
 Simulator mode is never inferred from SDK internals. It requires
 `SENXE_SIMULATOR=1`, and is refused if the installed CL SDK does not look like
-the replay simulator. Without it, every run is treated as real CL1 hardware.
+the replay simulator. Without it, every run is treated as real CL1 hardware,
+and a run is refused if the installed SDK looks like the replay simulator, so
+replayed recordings cannot be written to disk as hardware evidence. Every
+evidence row, session recording and feedback schedule carries a `Backend`
+label (`simulator` or `hardware`); the analysis script only lets
+hardware-only tables satisfy a confirmatory or falsification gate.
 
+`core.neurons.cl_open()` is the only entry point to the device. It runs the
+approval gate before opening and yields the audited proxy, which refuses
+every SDK stimulation method other than the audited `stim()` call.
 Real-hardware stimulation is blocked until the operator supplies explicit
-approved limits. Calibration checks both input evoked responses and motor
-readout viability. A failed fixed mapping stops the task unless a
-pre-authorized deterministic reserve remap is enabled.
+approved limits. A stimulation whose device timestamp cannot be read stops a
+real-hardware run, because the artifact-exclusion interval of the following
+response window could not be verified.
+
+Calibration probes each stimulatable electrode five times and compares the
+evoked response with repeated baseline windows. The health gate works on
+standardized responses (difference divided by its standard error). Real
+hardware has no default threshold: the supervising laboratory must freeze
+`SENXE_MIN_INPUT_RESPONSE_Z` and `SENXE_MIN_OUTPUT_RESPONSE_Z` before the run.
+A failed fixed mapping stops the task unless a pre-authorized deterministic
+reserve remap is enabled.
+
+The wrist force used by the force supervisor is the contact force in the
+world frame: the raw sensor reading is rotated out of the sensor frame and
+the weight of the gripper is removed, so free space reads zero and the
+deterministic retract moves away from the contact.
+
+Because partial runs stay on disk, the analysis script checks every run
+(`RunID`) against the frozen protocol before any gate is computed: one row
+per protocol episode, in the right phase and scenario split, with the
+protocol's hash, and exactly one run per culture and condition, so two
+interrupted runs cannot be spliced into a complete one. Only a protocol
+marked `"confirmatory": true` in `config/cl1_protocols.json` (currently
+`senxe_contact_skill_v2`) can set a confirmatory or falsification flag; the
+22-episode application protocol is reported descriptively only. A run the
+ledger shows was already started is treated as interrupted and is not
+restarted unless `--restart-interrupted-run` is passed, which is itself
+recorded. Any incomplete run is listed in `analysis/incomplete_runs.csv` and
+blocks every confirmatory and falsification gate. Output conflicts that are
+knowable in advance (duplicate run keys, an existing donor schedule) are
+rejected before the device is opened, so a mistaken re-run never
+re-stimulates a culture.
+
+Each episode is reset with `reset_with_seed`, which reseeds RoboSuite's own
+placement generator, so the same seed gives the same initial layout in every
+condition; the seed and the initial nut pose are written to each evidence
+row.
+
+The benchmark writes each episode row to disk as soon as the episode ends,
+and records a run in `<output>.runs.jsonl` before the first pulse, so a
+culture that was stimulated in a crashed run cannot be reused under another
+condition.
 
 Each evidence record links:
 
@@ -133,7 +180,7 @@ Each evidence record links:
 The benchmark supports:
 
 - `contact_skill`;
-- `nominal_only`;
+- `baseline_only`;
 - `zero_spikes`;
 - `shuffled_spikes`;
 - `no_feedback`;

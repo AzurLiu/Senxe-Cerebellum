@@ -7,6 +7,8 @@ import argparse
 import csv
 from pathlib import Path
 
+from core.learning_protocol import default_protocol_path, load_protocols
+from core.provenance import project_provenance
 from core.experiment_statistics import (
     bootstrap_difference,
     bootstrap_mean,
@@ -38,8 +40,99 @@ def _write(path: Path, fields: list[str], rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def incomplete_runs(
+    rows: list[dict[str, str]],
+    protocol_id: str,
+) -> dict[tuple[str, str, str], str]:
+    """Return every (culture, condition, run) that is not a complete protocol.
+
+    Completeness is checked per ``RunID``, never per culture: a run is
+    complete only when that single run has exactly one row for every episode
+    of the frozen protocol, each in the phase the protocol assigns to that
+    episode and in the scenario split that phase requires (held-out for
+    evaluation and retention phases, training otherwise), and its
+    ``ProtocolHash`` is that protocol's hash. A culture and condition must
+    also map to exactly one run, so two interrupted acquisitions cannot be
+    spliced into one "complete" experiment. Episode rows are written as each
+    episode ends, so an interrupted acquisition leaves a prefix of a run on
+    disk; that prefix must never satisfy a confirmatory gate.
+    """
+
+    protocol = load_protocols(default_protocol_path())[protocol_id]
+    expected_hash = project_provenance(
+        protocol_id=protocol_id,
+    )["protocol_hash"]
+    expected = []
+    for episode in range(protocol.total_episodes):
+        phase = protocol.phase_for_episode(episode)
+        split = (
+            "heldout"
+            if phase.heldout_evaluation or phase.is_evaluation
+            else "train"
+        )
+        expected.append((phase.phase.value, split))
+
+    runs: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    run_ids_by_group: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        culture = str(row["CultureID"])
+        condition = str(row["Condition"])
+        run_id = str(row.get("RunID", "")).strip()
+        runs.setdefault((culture, condition, run_id), []).append(row)
+        run_ids_by_group.setdefault((culture, condition), set()).add(run_id)
+
+    problems: dict[tuple[str, str, str], str] = {}
+    for key, run_rows in sorted(runs.items()):
+        by_episode: dict[int, dict[str, str]] = {}
+        reason = ""
+        if not key[2]:
+            reason = "rows have no RunID"
+        elif len(run_ids_by_group[key[:2]]) > 1:
+            reason = (
+                "culture and condition are split across "
+                f"{len(run_ids_by_group[key[:2]])} runs"
+            )
+        for row in ([] if reason else run_rows):
+            try:
+                episode = int(str(row.get("Episode", "")).strip())
+            except ValueError:
+                reason = "non-integer episode index"
+                break
+            if episode in by_episode:
+                reason = f"episode {episode} appears more than once"
+                break
+            by_episode[episode] = row
+        if not reason and sorted(by_episode) != list(range(len(expected))):
+            reason = (
+                f"{len(by_episode)} of {len(expected)} protocol episodes "
+                "present"
+            )
+        if not reason:
+            for episode, (phase, split) in enumerate(expected):
+                row = by_episode[episode]
+                if str(row["ProtocolPhase"]) != phase:
+                    reason = f"episode {episode} is not in phase {phase}"
+                    break
+                if str(row.get("ScenarioSplit", "")) != split:
+                    reason = (
+                        f"episode {episode} did not use a {split} scenario"
+                    )
+                    break
+                if str(row["ProtocolHash"]) != expected_hash:
+                    reason = "protocol hash does not match " + protocol_id
+                    break
+        if reason:
+            problems[key] = reason
+    return problems
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--protocol-id",
+        default="senxe_contact_skill_v2",
+        help="Frozen protocol every run must complete to count as evidence.",
+    )
     parser.add_argument("input", nargs="?", type=Path, default=Path(
         "ablation_results.csv"
     ))
@@ -53,17 +146,21 @@ def main() -> None:
     if not rows:
         raise RuntimeError("ablation input contains no rows")
     required_fields = {
+        "Backend",
         "ChannelMapHash",
         "ChannelMapVersion",
         "ChannelHealthReport",
         "CodeHash",
         "Condition",
         "CultureID",
+        "Episode",
         "EpisodeForceSafe",
         "EpisodeSuccess",
         "ProtocolHash",
         "ProtocolPhase",
+        "RunID",
         "RuntimeVersions",
+        "ScenarioSplit",
         "StimSafetyLimits",
         "EpisodeStimAbsChargeNc",
         "EpisodeStimCalls",
@@ -85,6 +182,37 @@ def main() -> None:
             "RuntimeVersions",
             "StimSafetyLimits",
         )
+    )
+    backends = {str(row["Backend"]).strip() for row in rows}
+    if not backends <= {"hardware", "simulator"}:
+        raise RuntimeError(
+            "Ablation input has rows without a valid Backend label: "
+            + ", ".join(sorted(backends))
+        )
+    # Simulator replays contain no stimulation-responsive plasticity. They
+    # can exercise the software, but they can never satisfy a confirmatory
+    # or falsification gate.
+    hardware_evidence = backends == {"hardware"}
+    run_problems = incomplete_runs(rows, args.protocol_id)
+    protocol_complete = not run_problems
+    # A demonstration protocol can be analysed descriptively (means and
+    # intervals), but only a protocol declared confirmatory in the frozen
+    # configuration may set a confirmatory or falsification flag.
+    confirmatory_protocol = load_protocols(
+        default_protocol_path()
+    )[args.protocol_id].confirmatory
+    _write(
+        args.output_dir / "incomplete_runs.csv",
+        ["CultureID", "Condition", "RunID", "Reason"],
+        [
+            {
+                "CultureID": culture,
+                "Condition": condition,
+                "RunID": run_id,
+                "Reason": reason,
+            }
+            for (culture, condition, run_id), reason in run_problems.items()
+        ],
     )
     conditions_by_culture: dict[str, set[str]] = {}
     for row in rows:
@@ -127,8 +255,16 @@ def main() -> None:
                     independent_culture_design
                 ),
                 "ProvenanceConsistent": int(provenance_consistent),
+                "Backend": "|".join(sorted(backends)),
+                "ProtocolComplete": int(protocol_complete),
+                "IncompleteRuns": len(run_problems),
+                "ProtocolID": args.protocol_id,
+                "ConfirmatoryProtocol": int(confirmatory_protocol),
                 "ConfirmatoryValid": int(
-                    independent_culture_design
+                    hardware_evidence
+                    and confirmatory_protocol
+                    and protocol_complete
+                    and independent_culture_design
                     and provenance_consistent
                     and estimate.biological_replicates
                     >= MIN_CONFIRMATORY_CULTURES
@@ -196,10 +332,18 @@ def main() -> None:
                     independent_culture_design
                 ),
                 "ProvenanceConsistent": int(provenance_consistent),
+                "Backend": "|".join(sorted(backends)),
                 # Preregistered superiority plus a 5 percentage-point
                 # force-safety non-inferiority margin.
+                "ProtocolComplete": int(protocol_complete),
+                "IncompleteRuns": len(run_problems),
+                "ProtocolID": args.protocol_id,
+                "ConfirmatoryProtocol": int(confirmatory_protocol),
                 "PassesFalsificationGate": int(
                     valid
+                    and hardware_evidence
+                    and confirmatory_protocol
+                    and protocol_complete
                     and independent_culture_design
                     and provenance_consistent
                     and success_difference.biological_replicates
@@ -219,6 +363,17 @@ def main() -> None:
         list(comparison_rows[0]) if comparison_rows else [],
         comparison_rows,
     )
+    if not confirmatory_protocol:
+        print(
+            f"{args.protocol_id} is not a confirmatory protocol: results "
+            "are descriptive only and every confirmatory flag is 0."
+        )
+    if run_problems:
+        print(
+            f"{len(run_problems)} run(s) are not a complete "
+            f"{args.protocol_id} protocol; no confirmatory gate can pass. "
+            f"See {args.output_dir / 'incomplete_runs.csv'}"
+        )
     print(f"Analysis written to {args.output_dir}")
 
 

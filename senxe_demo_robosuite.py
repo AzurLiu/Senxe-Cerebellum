@@ -20,12 +20,15 @@ from core.channel_map import (
 )
 from core.channel_health import (
     ChannelHealthReport,
+    health_thresholds_from_env,
     require_channel_health,
     resolve_contact_channel_map,
 )
 from core.neurons import (
+    BACKEND_SIMULATOR,
     BudgetedNeurons,
     cl_open,
+    evidence_backend,
     is_cl_simulator,
     require_stimulation_approval,
     simulator_mode_hint,
@@ -110,14 +113,6 @@ MAX_STIM_AMPLITUDE_UA     = STIM_SAFETY_LIMITS.max_amplitude_ua
 MAX_STIM_CALLS            = STIM_SAFETY_LIMITS.max_stim_calls
 MAX_STIM_CHANNEL_PULSES   = STIM_SAFETY_LIMITS.max_channel_pulses
 MAX_STIM_ABS_CHARGE_NC    = STIM_SAFETY_LIMITS.max_abs_charge_nc
-MIN_INPUT_RESPONSE_DELTA   = float(os.getenv(
-    "SENXE_MIN_INPUT_RESPONSE_DELTA",
-    "0",
-))
-MIN_OUTPUT_RESPONSE_DELTA  = float(os.getenv(
-    "SENXE_MIN_OUTPUT_RESPONSE_DELTA",
-    "0",
-))
 ALLOW_CALIBRATION_REMAP    = os.getenv(
     "SENXE_ALLOW_CALIBRATION_REMAP",
     "0",
@@ -131,6 +126,28 @@ def make_robosuite_env(render=False):
                      has_offscreen_renderer=render, use_camera_obs=False,
                      render_camera="frontview", horizon=MAX_STEPS, reward_shaping=True)
     return GymWrapper(raw), raw
+
+def reset_with_seed(env, raw_env, seed: int):
+    """Reset so that the same seed always gives the same initial layout.
+
+    RoboSuite samples object placement from ``raw_env.rng``, a NumPy
+    ``Generator`` created once when the environment is built (unseeded by
+    default). ``GymWrapper.reset(seed=...)`` only seeds the legacy global
+    ``np.random`` state, which that generator ignores, so two environments
+    reset with the same seed start from different nut positions and paired
+    conditions are not actually paired. The generator is reseeded in place
+    here because the placement samplers hold a reference to the same object.
+    """
+
+    seed = int(seed)
+    np.random.seed(seed)
+    generator = getattr(raw_env, "rng", None)
+    if generator is not None:
+        generator.bit_generator.state = (
+            np.random.default_rng(seed).bit_generator.state
+        )
+    return env.reset(seed=seed)
+
 
 def extract_obs(obs, raw_env=None):
     if raw_env is None:
@@ -184,8 +201,11 @@ def extract_obs(obs, raw_env=None):
         trq_raw = robot.ee_torque
         frc = frc_raw["right"] if isinstance(frc_raw, dict) and "right" in frc_raw else frc_raw
         trq = trq_raw["right"] if isinstance(trq_raw, dict) and "right" in trq_raw else trq_raw
-        frc = np.array(frc).flatten()[:3]
-        trq = np.array(trq).flatten()[:3]
+        frc, trq = _ee_wrench_in_world_frame(
+            raw_env,
+            np.array(frc, dtype=float).flatten()[:3],
+            np.array(trq, dtype=float).flatten()[:3],
+        )
         eef = np.array(eef).flatten()[:3]
         vel = np.array(vel).flatten()[:3]
         jnt = raw_env.robots[0]._joint_positions
@@ -261,6 +281,7 @@ def extract_obs(obs, raw_env=None):
             eef_to_nut=e2n,
             grasp_target_pos=grasp_target,
             nut_pos=nut,
+            nut_yaw_deg=_quat_yaw_deg(nut_quat),
             peg_pos=peg,
             nut_peg_xy_error_m=float(np.linalg.norm(nut_to_peg[:2])),
             nut_peg_distance_m=float(np.linalg.norm(nut_to_peg)),
@@ -276,6 +297,45 @@ def extract_obs(obs, raw_env=None):
     except Exception as e:
         raise RuntimeError(f"Failed to extract observation from raw_env: {e}") from e
 
+def _ee_wrench_in_world_frame(raw_env, sensor_force, sensor_torque):
+    """Rotate the wrist force/torque reading into the world frame and tare it.
+
+    RoboSuite's ``ee_force`` / ``ee_torque`` are raw MuJoCo sensor readings
+    expressed in the wrist sensor site frame, and the force includes the
+    weight of everything mounted below the sensor. The controller writes
+    Cartesian actions in the world-aligned base frame, so using the raw
+    reading as a direction makes the "retract away from contact" command
+    point the wrong way and makes free space look like contact.
+
+    The returned force is the contact force in the world frame: rotated by
+    the sensor site orientation and with the static weight of the sensed
+    subtree removed. The torque is only rotated; its gravity term depends on
+    the gripper orientation and is left in. Any lookup failure raises, so a
+    wrench that cannot be interpreted never reaches the force supervisor.
+    """
+
+    robot = raw_env.robots[0]
+    gripper = robot.gripper
+    if isinstance(gripper, dict):
+        arms = getattr(robot, "arms", None) or list(gripper)
+        gripper = gripper[arms[0]]
+    sensor_name = gripper.important_sensors["force_ee"]
+    model = raw_env.sim.model
+    data = raw_env.sim.data
+    sensor_id = int(model.sensor_name2id(sensor_name))
+    site_id = int(np.asarray(model.sensor_objid)[sensor_id])
+    rotation = np.asarray(
+        data.site_xmat[site_id],
+        dtype=float,
+    ).reshape(3, 3)
+    body_id = int(np.asarray(model.site_bodyid)[site_id])
+    sensed_mass = float(np.asarray(model.body_subtreemass)[body_id])
+    gravity = np.asarray(model.opt.gravity, dtype=float).flatten()[:3]
+    force = rotation @ np.asarray(sensor_force, dtype=float) + sensed_mass * gravity
+    torque = rotation @ np.asarray(sensor_torque, dtype=float)
+    return force, torque
+
+
 def _square_nut_grasp_confirmed(raw_env) -> bool:
     """Return RoboSuite's contact-based grasp result for the active square nut."""
 
@@ -290,6 +350,16 @@ def _square_nut_grasp_confirmed(raw_env) -> bool:
         ))
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return False
+
+
+def _quat_yaw_deg(quat) -> float:
+    if quat is None:
+        return float("nan")
+    w, x, y, z = np.asarray(quat, dtype=float).flatten()[:4]
+    return float(np.degrees(np.arctan2(
+        2.0 * (w * z + x * y),
+        1.0 - 2.0 * (y * y + z * z),
+    )))
 
 
 def _square_symmetric_yaw_error_rad(nut_quat, peg_quat) -> float:
@@ -416,7 +486,9 @@ class CL1Agent:
         self.channel_map = channel_map or DEFAULT_CONTACT_CHANNEL_MAP
         self.channel_map_metadata = channel_map_metadata(self.channel_map)
         self.channel_health_report = channel_health_report
+        self.backend = evidence_backend()
         self.experiment_metadata = {
+            "backend": self.backend,
             **dict(experiment_metadata or {}),
             **self.channel_map_metadata,
             "channel_health_report": (
@@ -444,6 +516,8 @@ class CL1Agent:
         self.current_protocol_phase = self.protocol.phase_for_episode(0)
         self._entered_protocol_phase = None
         self.last_rest_observation = None
+        self._training_end_monotonic = None
+        self._clock = time.monotonic
         self.artifact_wait_ms = float(
             ARTIFACT_WAIT_OVERRIDE
             if ARTIFACT_WAIT_OVERRIDE is not None
@@ -508,11 +582,15 @@ class CL1Agent:
                 contact_channels=self.channel_map.contact_channels,
             ),
         )
-        resp_weights = responsiveness if channel_ranking is not None else None
+        # The protocol declares a fixed zero-bias count readout. Calibration
+        # responsiveness therefore never weights the decoder (unequal
+        # weights inside an antagonistic pair are a constant sign bias that
+        # could be mistaken for skill), and there is no cross-step EMA state.
         self.contact_decoder = AntagonisticDecoder(
             CONTACT_SKILL_DIM,
+            ema_alpha=1.0,
             action_scale=1.0,
-            channel_weights=resp_weights,
+            channel_weights=None,
             channel_groups=self.channel_map.decoder_groups(),
         )
         self.decoder = self.contact_decoder
@@ -588,6 +666,11 @@ class CL1Agent:
         real_spikes = list(set(np.where(abs_frames > threshold)[1]))
         firing_rates = np.mean(abs_frames, axis=0)
         
+        if self.ablation_spike_mode == "shuffled":
+            raise RuntimeError(
+                "The shuffled-spike control is not implemented for the "
+                "legacy_voltage pipeline; use the timestamped pipeline"
+            )
         if self.ablation_spike_mode == "zero":
             spikes = []
         elif self.ablation_spike_mode == "random":
@@ -601,16 +684,38 @@ class CL1Agent:
         return spikes, firing_rates, counts
 
     def _enter_phase_and_observe_rest(self) -> None:
-        """Enforce each protocol phase's cumulative retention delay once."""
+        """Hold each retention phase until its delay from the end of training.
+
+        The protocol defines retention delays from the end of feedback
+        training (5, 15 and 45 minutes). Evaluation episodes run between
+        those points and take wall-clock time, so the wait is computed
+        against the recorded end of training, not from the moment the phase
+        is entered; otherwise the "15 minute" test would start half an hour
+        or more after training. The delay that actually elapsed is recorded,
+        including any overrun when the preceding episodes already took
+        longer than the nominal delay.
+        """
 
         phase = self.current_protocol_phase
         if self._entered_protocol_phase is phase.phase:
             return
         self._entered_protocol_phase = phase.phase
         rest_seconds = float(phase.rest_before_seconds)
+        target_seconds = float(
+            self.protocol.delay_after_training_seconds(phase.phase)
+        )
+        training_end = self._training_end_monotonic
+        elapsed = (
+            None
+            if training_end is None
+            else float(self._clock() - training_end)
+        )
         self.last_rest_observation = {
             "phase": phase.phase.value,
             "requested_seconds": rest_seconds,
+            "target_seconds_after_training": target_seconds,
+            "actual_seconds_after_training": elapsed,
+            "overrun_seconds": 0.0,
             "observed_seconds": 0.0,
             "observed_ticks": 0,
             "simulator_skipped": False,
@@ -624,18 +729,34 @@ class CL1Agent:
             self.last_rest_observation["simulator_skipped"] = True
             return
 
+        if elapsed is None:
+            # Training was not observed in this process; the only delay
+            # that can be enforced is the increment itself.
+            wait_seconds = rest_seconds
+        else:
+            wait_seconds = max(0.0, target_seconds - elapsed)
+            self.last_rest_observation["overrun_seconds"] = max(
+                0.0,
+                elapsed - target_seconds,
+            )
         observed_ticks = 0
-        started_at = time.monotonic()
-        for _ in self.neurons.loop(
-            ticks_per_second=1,
-            stop_after_seconds=rest_seconds,
-            ignore_jitter=True,
-        ):
-            observed_ticks += 1
+        started_at = self._clock()
+        if wait_seconds > 0:
+            for _ in self.neurons.loop(
+                ticks_per_second=1,
+                stop_after_seconds=wait_seconds,
+                ignore_jitter=True,
+            ):
+                observed_ticks += 1
+        finished_at = self._clock()
         self.last_rest_observation["observed_seconds"] = float(
-            time.monotonic() - started_at
+            finished_at - started_at
         )
         self.last_rest_observation["observed_ticks"] = observed_ticks
+        if training_end is not None:
+            self.last_rest_observation["actual_seconds_after_training"] = (
+                float(finished_at - training_end)
+            )
 
     def run_episode(self, max_steps=MAX_STEPS, record=False, ep_num=0):
         # Seed both numpy/random and Gym environment to guarantee exact paired layouts
@@ -644,7 +765,7 @@ class CL1Agent:
         self.rng = np.random.default_rng(seed)
         self.current_protocol_phase = self.protocol.phase_for_episode(ep_num)
         self._enter_phase_and_observe_rest()
-        obs, _ = self.env.reset(seed=seed)
+        obs, _ = reset_with_seed(self.env, self.raw_env, seed)
         if GENERALIZATION_ENABLED:
             self.active_scenario = self.scenario_schedule.select(
                 ep_num,
@@ -657,6 +778,14 @@ class CL1Agent:
         else:
             self.active_scenario = None
         obs_info = extract_obs(obs, raw_env=self.raw_env)
+        # Recorded so paired conditions can be checked row by row instead of
+        # being assumed equal because they share a seed.
+        initial_layout = {
+            "reset_seed": seed,
+            "initial_nut_x_m": float(obs_info["nut_pos"][0]),
+            "initial_nut_y_m": float(obs_info["nut_pos"][1]),
+            "initial_nut_yaw_deg": float(obs_info["nut_yaw_deg"]),
+        }
         episode_budget_start = self.neurons.budget_snapshot()
         self.contact_encoder.reset()
         self.contact_decoder.reset()
@@ -697,6 +826,15 @@ class CL1Agent:
                 for event in sensory_stim_events
                 if event["timestamp"] is not None
             )
+            if (
+                len(trigger_stim_timestamps) != len(sensory_stim_events)
+                and not is_cl_simulator()
+            ):
+                raise RuntimeError(
+                    "A stimulation delivered in this control step has no "
+                    "device timestamp; the response-window timing gate "
+                    "cannot be enforced"
+                )
             spikes, cur_fr, spike_counts = self._detect_spikes(
                 trigger_stim_timestamps
             )
@@ -903,7 +1041,20 @@ class CL1Agent:
             episode_budget_start,
             budget_end,
         )
+        rest = self.last_rest_observation or {}
         self.last_episode_metrics = {
+            **initial_layout,
+            "retention_target_seconds_after_training": (
+                rest.get("target_seconds_after_training")
+                if self.current_protocol_phase.rest_before_seconds > 0
+                else None
+            ),
+            "retention_actual_seconds_after_training": (
+                rest.get("actual_seconds_after_training")
+                if self.current_protocol_phase.rest_before_seconds > 0
+                and not rest.get("simulator_skipped")
+                else None
+            ),
             "episode_success": episode_success,
             "time_to_success_steps": time_to_success_steps,
             "step_count": len(force_history),
@@ -945,11 +1096,15 @@ class CL1Agent:
         self.recorded_feedback_schedule[int(ep_num)] = tuple(
             episode_delivered_feedback
         )
+        if self.current_protocol_phase.phase is LearningPhase.FEEDBACK_TRAINING:
+            # Updated after every training episode, so the value left when
+            # the next phase starts is the end of the last one.
+            self._training_end_monotonic = self._clock()
         return total_reward, 0.0, frames_list, success_rate, force_safe_rate
 
     def train(self, num_episodes=EPISODES, record_last_n=RECORD_LAST_N):
         print("\n" + "=" * 60)
-        mode_str = "Simulator Mode" if is_cl_simulator() else "Pure Wetware Mode"
+        mode_str = "Simulator Mode" if is_cl_simulator() else "Real CL1 Hardware Mode"
         print("  CL1 Bio-Computer Training (" + mode_str + ")")
         print("=" * 60)
         print(f"  Episodes: {num_episodes} | Env: {ENV_NAME} ({ROBOT})")
@@ -995,22 +1150,21 @@ def main():
     hud.reset()
     print("+" + "=" * 58 + "+")
     if is_cl_simulator():
-        print("|  Senxe Cerebellum v5.0 — cl-sdk Simulator Mode            |")
-        print("|  [!] WARNING: Real CL1 hardware not detected.             |")
-        print("|      Falling back to official cl-sdk Poisson simulation.  |")
+        print("|  Senxe Cerebellum v5.1 — cl-sdk Simulator Mode            |")
+        print("|  [!] SENXE_SIMULATOR=1: replayed recordings, no culture.  |")
+        print("|      Nothing from this run is biological evidence.        |")
     else:
-        print("|  Senxe Cerebellum v5.0 — Bounded Contact Skill            |")
+        print("|  Senxe Cerebellum v5.1 — Bounded Contact Skill            |")
     print("+" + "=" * 58 + "+\n")
 
     print("-" * 60)
     print("  Phase 0: Channel Warm-up Calibration")
     print("-" * 60)
-    with cl_open() as neurons:
-        require_stimulation_approval()
+    with cl_open(STIM_SAFETY_LIMITS) as experiment_neurons:
         require_hardware_evidence_recording()
-        experiment_neurons = BudgetedNeurons(
-            neurons,
-            safety_limits=STIM_SAFETY_LIMITS,
+        backend = evidence_backend()
+        input_z_threshold, output_z_threshold = health_thresholds_from_env(
+            simulator=backend == BACKEND_SIMULATOR,
         )
         calibration_recorder = CLSessionRecorder(
             experiment_neurons,
@@ -1022,6 +1176,7 @@ def main():
             attributes={
                 "protocol_id": PROTOCOL_ID,
                 "stage": "timestamped_calibration",
+                "backend": backend,
                 **base_provenance,
             },
         )
@@ -1043,10 +1198,10 @@ def main():
                 max_stim_amplitude=MAX_STIM_AMPLITUDE_UA,
             )
             resolved_map, health_report = resolve_contact_channel_map(
-                calibration.input_responsiveness,
-                calibration.output_responsiveness,
-                input_threshold=MIN_INPUT_RESPONSE_DELTA,
-                output_threshold=MIN_OUTPUT_RESPONSE_DELTA,
+                calibration.input_response_z,
+                calibration.output_response_z,
+                input_threshold=input_z_threshold,
+                output_threshold=output_z_threshold,
                 allow_reserve_remap=ALLOW_CALIBRATION_REMAP,
             )
             if not is_cl_simulator():

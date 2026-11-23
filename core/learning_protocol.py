@@ -89,6 +89,10 @@ class ProtocolSpec:
     controls: tuple[str, ...]
     required_recordings: tuple[str, ...]
     phases: tuple[PhaseSpec, ...]
+    # Only a protocol that declares itself confirmatory may produce a
+    # confirmatory or falsification verdict. Demonstration and reference
+    # protocols report descriptive statistics only.
+    confirmatory: bool = False
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ProtocolSpec":
@@ -119,6 +123,7 @@ class ProtocolSpec:
                 str(item) for item in value["required_recordings"]
             ),
             phases=phases,
+            confirmatory=value.get("confirmatory", False) is True,
         )
 
     def phase_for_episode(self, episode_index: int) -> PhaseSpec:
@@ -134,6 +139,25 @@ class ProtocolSpec:
     @property
     def total_episodes(self) -> int:
         return sum(phase.episodes for phase in self.phases)
+
+    def delay_after_training_seconds(self, target: LearningPhase) -> float:
+        """Nominal delay from the end of feedback training to ``target``.
+
+        ``rest_before_seconds`` values are increments (5 min, +10 min,
+        +30 min); the protocol defines each retention delay as their running
+        total measured from the end of training (5, 15, 45 min).
+        """
+
+        total = 0.0
+        after_training = False
+        for phase in self.phases:
+            if after_training:
+                total += phase.rest_before_seconds
+            if phase.phase is target:
+                return total if after_training else 0.0
+            if phase.phase is LearningPhase.FEEDBACK_TRAINING:
+                after_training = True
+        raise KeyError(f"phase is not present in protocol: {target.value}")
 
     def phase_start_episode(self, target: LearningPhase) -> int:
         cursor = 0

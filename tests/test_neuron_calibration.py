@@ -46,7 +46,10 @@ def test_timestamped_calibration_probes_only_stimulatable_channels(
         duration_sec=0.1,
     )
 
-    assert neurons.stimulated_channels == list(STIMULATABLE_CHANNELS)
+    assert neurons.stimulated_channels == list(STIMULATABLE_CHANNELS) * 5
+    assert calibration.probe_repeats == 5
+    assert calibration.input_response_z.shape == (64,)
+    assert calibration.output_response_z.shape == (64,)
     assert calibration.channel_ranking.shape == (64,)
     assert calibration.output_responsiveness.shape == (64,)
     assert calibration.input_responsiveness.shape == (64,)

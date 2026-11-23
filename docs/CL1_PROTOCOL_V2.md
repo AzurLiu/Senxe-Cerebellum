@@ -80,8 +80,16 @@ synthetic spike times.
 | retention 15 min | 20 | off | yes | +10 min |
 | retention 45 min | 20 | off | yes | +30 min |
 
-The delays are cumulative from the end of training. Simulator runs skip the
-wall-clock waits because the official simulator is non-learning.
+The delays are cumulative from the end of training: each retention phase
+starts 5, 15 and 45 minutes after the last feedback-training episode ends.
+The wait before a phase is computed against that recorded moment, so the
+time taken by the evaluation episodes in between is not added on top. If
+those episodes already took longer than the nominal delay, the phase starts
+immediately and the overrun is recorded. Every retention row carries both
+the nominal and the actually elapsed delay
+(`RetentionTargetSecondsAfterTraining`, `RetentionActualSecondsAfterTraining`).
+Simulator runs skip the wall-clock waits because the official simulator is
+non-learning.
 
 ## Conditions
 
