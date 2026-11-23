@@ -132,6 +132,10 @@ CSV_FIELDS = (
     "P95ForceN",
     "PeakTorqueNm",
     "P95TorqueNm",
+    "ResetSeed",
+    "InitialNutXM",
+    "InitialNutYM",
+    "InitialNutYawDeg",
     "FinalNutPegXYErrorM",
     "FinalNutPegDistanceM",
     "FinalPlacementDepthMarginM",
@@ -469,6 +473,51 @@ def _record_run_started(
         os.fsync(handle.fileno())
 
 
+def _donor_schedule_path(args: argparse.Namespace) -> Path:
+    return args.feedback_output_dir / (
+        f"{args.culture_id}_seq{args.sequence_index}_contact_skill.json"
+    )
+
+
+def _preflight_outputs(
+    args: argparse.Namespace,
+    *,
+    selected: list[str],
+    backend: str,
+    provenance: Mapping[str, str],
+) -> None:
+    """Reject output conflicts that are knowable before any stimulation.
+
+    Covers duplicate run / condition / episode keys, mixing backends, code,
+    protocol or runtime versions in one table, and an existing donor
+    feedback schedule. The channel-map hash is only known after calibration
+    and is checked again there.
+    """
+
+    for condition_name in selected:
+        run_id = f"{args.culture_id}:seq{args.sequence_index}:{condition_name}"
+        _validate_append_rows(
+            args.output,
+            [
+                {
+                    "RunID": run_id,
+                    "Condition": condition_name,
+                    "Episode": episode,
+                    "Backend": backend,
+                    "CodeHash": provenance["code_hash"],
+                    "ProtocolHash": provenance["protocol_hash"],
+                    "RuntimeVersions": provenance["runtime_versions"],
+                }
+                for episode in range(args.episodes)
+            ],
+        )
+    if "contact_skill" in selected and _donor_schedule_path(args).exists():
+        raise RuntimeError(
+            "Refusing to overwrite an existing donor feedback schedule: "
+            f"{_donor_schedule_path(args)}"
+        )
+
+
 def _scenario_value(agent: CL1Agent, name: str, fallback: str = "none") -> str:
     if agent.active_scenario is None:
         return fallback
@@ -588,6 +637,10 @@ def _run_condition(
                 "P95ForceN": metrics["p95_force_n"],
                 "PeakTorqueNm": metrics["peak_torque_nm"],
                 "P95TorqueNm": metrics["p95_torque_nm"],
+                "ResetSeed": metrics["reset_seed"],
+                "InitialNutXM": metrics["initial_nut_x_m"],
+                "InitialNutYM": metrics["initial_nut_y_m"],
+                "InitialNutYawDeg": metrics["initial_nut_yaw_deg"],
                 "FinalNutPegXYErrorM": (
                     metrics["final_nut_peg_xy_error_m"]
                 ),
@@ -696,17 +749,23 @@ def main() -> None:
         else {}
     )
 
+    # Everything that can be decided without the device is decided before
+    # it is opened. A mistaken re-run of a finished command must fail here,
+    # not after calibration has already stimulated the culture again.
+    backend = evidence_backend()
+    simulator = backend == BACKEND_SIMULATOR
+    _validate_hardware_scope(args, simulator)
+    input_z_threshold, output_z_threshold = health_thresholds_from_env(
+        simulator=simulator,
+    )
+    _preflight_outputs(
+        args,
+        selected=selected,
+        backend=backend,
+        provenance=provenance,
+    )
+
     with cl_open(STIM_SAFETY_LIMITS) as experiment_neurons:
-        backend = evidence_backend()
-        simulator = backend == BACKEND_SIMULATOR
-        _validate_hardware_scope(args, simulator)
-        input_z_threshold, output_z_threshold = health_thresholds_from_env(
-            simulator=simulator,
-        )
-        _validate_append_rows(
-            args.output,
-            [{"RunID": "", "Condition": "", "Episode": "", "Backend": backend}],
-        )
         _record_run_started(
             args.output,
             culture_id=args.culture_id,
@@ -827,10 +886,7 @@ def main() -> None:
             )
             schedule_path = None
             if condition_name == "contact_skill":
-                schedule_path = args.feedback_output_dir / (
-                    f"{args.culture_id}_seq{args.sequence_index}"
-                    "_contact_skill.json"
-                )
+                schedule_path = _donor_schedule_path(args)
                 if schedule_path.exists():
                     raise RuntimeError(
                         "Refusing to overwrite an existing donor feedback "

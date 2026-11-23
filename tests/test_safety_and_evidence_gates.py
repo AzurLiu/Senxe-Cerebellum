@@ -103,11 +103,31 @@ def test_evidence_table_carries_backend_and_refuses_mixing(tmp_path):
         benchmark._append_rows(path, [other])
 
 
-def _evidence_rows(backend: str) -> list[dict]:
+def _evidence_rows(
+    backend: str,
+    *,
+    episodes: int | None = None,
+    split: str | None = None,
+) -> list[dict]:
+    """Synthetic table: six cultures per condition, full protocol by default."""
+
+    from core.learning_protocol import default_protocol_path, load_protocols
+    from core.provenance import project_provenance
+
+    protocol_id = "senxe_contact_skill_v2"
+    protocol = load_protocols(default_protocol_path())[protocol_id]
+    protocol_hash = project_provenance(protocol_id=protocol_id)["protocol_hash"]
+    count = protocol.total_episodes if episodes is None else episodes
     rows = []
     for condition, success in (("contact_skill", 1), ("baseline_only", 0)):
         for culture in range(6):
-            for episode in range(4):
+            for episode in range(count):
+                phase = protocol.phase_for_episode(episode)
+                expected_split = (
+                    "heldout"
+                    if phase.heldout_evaluation or phase.is_evaluation
+                    else "train"
+                )
                 rows.append({
                     "Backend": backend,
                     "ChannelMapHash": "m",
@@ -119,9 +139,10 @@ def _evidence_rows(backend: str) -> list[dict]:
                     "Episode": episode,
                     "EpisodeForceSafe": 1,
                     "EpisodeSuccess": success,
-                    "ProtocolHash": "p",
-                    "ProtocolPhase": "retention_15_min",
+                    "ProtocolHash": protocol_hash,
+                    "ProtocolPhase": phase.phase.value,
                     "RuntimeVersions": "r",
+                    "ScenarioSplit": split or expected_split,
                     "StimSafetyLimits": "{}",
                     "EpisodeStimAbsChargeNc": 0,
                     "EpisodeStimCalls": 0,
@@ -130,17 +151,7 @@ def _evidence_rows(backend: str) -> list[dict]:
     return rows
 
 
-@pytest.mark.parametrize(
-    "backend, expected",
-    [("simulator", "0"), ("hardware", "1")],
-)
-def test_confirmatory_gates_only_accept_hardware_rows(
-    tmp_path,
-    monkeypatch,
-    backend,
-    expected,
-):
-    rows = _evidence_rows(backend)
+def _run_analysis(tmp_path, monkeypatch, rows):
     source = tmp_path / "in.csv"
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -153,16 +164,104 @@ def test_confirmatory_gates_only_accept_hardware_rows(
         ["analyze_ablations.py", str(source), "--output-dir", str(out)],
     )
     analyze_ablations.main()
-
     with (out / "culture_level_summary.csv").open() as handle:
         summary = list(csv.DictReader(handle))
-    assert {row["ConfirmatoryValid"] for row in summary} == {expected}
     with (out / "preregistered_comparisons.csv").open() as handle:
-        comparisons = list(csv.DictReader(handle))
-    baseline = [row for row in comparisons if row["Control"] == "baseline_only"]
-    assert baseline
-    assert {row["PassesFalsificationGate"] for row in baseline} == {expected}
+        comparisons = [
+            row for row in csv.DictReader(handle)
+            if row["Control"] == "baseline_only"
+        ]
+    with (out / "incomplete_runs.csv").open() as handle:
+        incomplete = list(csv.DictReader(handle))
+    assert comparisons
+    return summary, comparisons, incomplete
+
+
+@pytest.mark.parametrize(
+    "backend, expected",
+    [("simulator", "0"), ("hardware", "1")],
+)
+def test_confirmatory_gates_only_accept_hardware_rows(
+    tmp_path,
+    monkeypatch,
+    backend,
+    expected,
+):
+    summary, comparisons, incomplete = _run_analysis(
+        tmp_path,
+        monkeypatch,
+        _evidence_rows(backend),
+    )
+
+    assert not incomplete
+    assert {row["ConfirmatoryValid"] for row in summary} == {expected}
+    assert {
+        row["PassesFalsificationGate"] for row in comparisons
+    } == {expected}
     assert {row["Backend"] for row in comparisons} == {backend}
+
+
+def _drop_last_episode_of_one_culture(rows):
+    last = max(row["Episode"] for row in rows)
+    return [
+        row for row in rows
+        if not (
+            row["CultureID"] == "contact_skill_0"
+            and row["Episode"] == last
+        )
+    ]
+
+
+def _one_retention_episode_per_culture():
+    kept = {}
+    for row in _evidence_rows("hardware"):
+        if row["ProtocolPhase"] == "retention_15_min":
+            kept.setdefault(row["CultureID"], row)
+    return list(kept.values())
+
+
+def _duplicate_one_episode(rows):
+    return rows + [dict(rows[0])]
+
+
+@pytest.mark.parametrize(
+    "make_rows, reason",
+    [
+        # Correct hardware provenance, but the acquisition stopped after
+        # one episode per culture.
+        (lambda: _one_retention_episode_per_culture(), "protocol episodes"),
+        # Full length, but one culture is missing its last episode.
+        (
+            lambda: _drop_last_episode_of_one_culture(
+                _evidence_rows("hardware")
+            ),
+            "protocol episodes",
+        ),
+        # Full length, but generalization scenarios were switched off.
+        (lambda: _evidence_rows("hardware", split="none"), "scenario"),
+        (
+            lambda: _duplicate_one_episode(_evidence_rows("hardware")),
+            "more than once",
+        ),
+    ],
+)
+def test_incomplete_hardware_runs_never_pass_a_gate(
+    tmp_path,
+    monkeypatch,
+    make_rows,
+    reason,
+):
+    summary, comparisons, incomplete = _run_analysis(
+        tmp_path,
+        monkeypatch,
+        make_rows(),
+    )
+
+    assert incomplete
+    assert any(reason in row["Reason"] for row in incomplete)
+    assert {row["ConfirmatoryValid"] for row in summary} == {"0"}
+    assert {row["PassesFalsificationGate"] for row in comparisons} == {"0"}
+    assert {row["ProtocolComplete"] for row in comparisons} == {"0"}
 
 
 # ── 3. stimulation gate cannot be bypassed ───────────────────────────────
@@ -433,6 +532,8 @@ def test_episode_rows_survive_a_crash_in_a_later_episode(
                     "final_placement_depth_margin_m",
                     "final_nut_peg_yaw_error_deg", "final_grasp_confirmed",
                     "max_stim_calls", "max_channel_pulses", "stim_calls",
+                    "reset_seed", "initial_nut_x_m", "initial_nut_y_m",
+                    "initial_nut_yaw_deg",
                     "channel_pulses", "abs_charge_nc", "episode_stim_calls",
                     "episode_channel_pulses", "episode_abs_charge_nc",
                 )
@@ -486,3 +587,109 @@ def test_episode_rows_survive_a_crash_in_a_later_episode(
     assert [row["Episode"] for row in rows] == ["0", "1"]
     assert {row["Backend"] for row in rows} == {"simulator"}
     assert partial == [{0: ()}]
+
+
+# ── 8. re-running a finished command never reaches the device ────────────
+
+def test_duplicate_run_is_rejected_before_the_device_is_opened(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "results.csv"
+    provenance = benchmark.project_provenance(
+        protocol_id=benchmark.BENCHMARK_PROTOCOL_ID,
+    )
+    row = {field: "" for field in benchmark.CSV_FIELDS}
+    row.update({
+        "RunID": "simulator:seq0:contact_skill",
+        "Backend": "simulator",
+        "CultureID": "simulator",
+        "Condition": "contact_skill",
+        "Episode": 0,
+        "CodeHash": provenance["code_hash"],
+        "ProtocolHash": provenance["protocol_hash"],
+        "RuntimeVersions": provenance["runtime_versions"],
+    })
+    benchmark._append_rows(output, [row])
+
+    opened = []
+
+    def _never_open(*args, **kwargs):
+        opened.append(1)
+        raise AssertionError("the device must not be opened")
+
+    monkeypatch.setattr(benchmark, "cl_open", _never_open)
+    monkeypatch.setattr(sys, "argv", [
+        "run_ablation_benchmark.py",
+        "--condition", "contact_skill",
+        "--episodes", "2",
+        "--output", str(output),
+        "--feedback-output-dir", str(tmp_path / "fb"),
+    ])
+    with pytest.raises(RuntimeError, match="duplicate"):
+        benchmark.main()
+    assert not opened
+    assert not benchmark.run_ledger_path(output).exists()
+
+
+def test_existing_donor_schedule_is_rejected_before_the_device_is_opened(
+    tmp_path,
+    monkeypatch,
+):
+    feedback_dir = tmp_path / "fb"
+    feedback_dir.mkdir()
+    (feedback_dir / "simulator_seq0_contact_skill.json").write_text("{}")
+    opened = []
+    monkeypatch.setattr(
+        benchmark,
+        "cl_open",
+        lambda *args, **kwargs: opened.append(1),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "run_ablation_benchmark.py",
+        "--condition", "contact_skill",
+        "--episodes", "2",
+        "--output", str(tmp_path / "results.csv"),
+        "--feedback-output-dir", str(feedback_dir),
+    ])
+    with pytest.raises(RuntimeError, match="donor feedback schedule"):
+        benchmark.main()
+    assert not opened
+
+
+# ── 9. the same seed gives the same initial layout ───────────────────────
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_same_seed_gives_identical_layout_across_environments():
+    def layout(env, raw_env, seed):
+        obs, _ = demo.reset_with_seed(env, raw_env, seed)
+        info = demo.extract_obs(obs, raw_env=raw_env)
+        return np.concatenate([
+            info["nut_pos"],
+            [info["nut_yaw_deg"]],
+            info["joint_pos"],
+        ])
+
+    first = demo.make_robosuite_env(render=False)
+    second = demo.make_robosuite_env(render=False)
+    try:
+        a = layout(*first, 42)
+        layout(*first, 7)
+        a_again = layout(*first, 42)
+        b = layout(*second, 42)
+        other = layout(*second, 43)
+        np.testing.assert_allclose(a, b, atol=1e-9)
+        np.testing.assert_allclose(a, a_again, atol=1e-9)
+        assert np.linalg.norm(b[:2] - other[:2]) > 1e-3
+    finally:
+        first[0].close()
+        second[0].close()
+
+
+def test_evidence_rows_record_the_initial_layout():
+    assert {
+        "ResetSeed",
+        "InitialNutXM",
+        "InitialNutYM",
+        "InitialNutYawDeg",
+    } <= set(benchmark.CSV_FIELDS)

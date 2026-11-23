@@ -141,6 +141,20 @@ world frame: the raw sensor reading is rotated out of the sensor frame and
 the weight of the gripper is removed, so free space reads zero and the
 deterministic retract moves away from the contact.
 
+Because partial runs stay on disk, the analysis script checks every culture
+against the frozen protocol before any gate is computed: one row per
+protocol episode, in the right phase and scenario split, with the protocol's
+hash. Any incomplete run is listed in `analysis/incomplete_runs.csv` and
+blocks every confirmatory and falsification gate. Output conflicts that are
+knowable in advance (duplicate run keys, an existing donor schedule) are
+rejected before the device is opened, so a mistaken re-run never
+re-stimulates a culture.
+
+Each episode is reset with `reset_with_seed`, which reseeds RoboSuite's own
+placement generator, so the same seed gives the same initial layout in every
+condition; the seed and the initial nut pose are written to each evidence
+row.
+
 The benchmark writes each episode row to disk as soon as the episode ends,
 and records a run in `<output>.runs.jsonl` before the first pulse, so a
 culture that was stimulated in a crashed run cannot be reused under another

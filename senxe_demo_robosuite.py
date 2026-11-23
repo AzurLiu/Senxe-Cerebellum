@@ -127,6 +127,28 @@ def make_robosuite_env(render=False):
                      render_camera="frontview", horizon=MAX_STEPS, reward_shaping=True)
     return GymWrapper(raw), raw
 
+def reset_with_seed(env, raw_env, seed: int):
+    """Reset so that the same seed always gives the same initial layout.
+
+    RoboSuite samples object placement from ``raw_env.rng``, a NumPy
+    ``Generator`` created once when the environment is built (unseeded by
+    default). ``GymWrapper.reset(seed=...)`` only seeds the legacy global
+    ``np.random`` state, which that generator ignores, so two environments
+    reset with the same seed start from different nut positions and paired
+    conditions are not actually paired. The generator is reseeded in place
+    here because the placement samplers hold a reference to the same object.
+    """
+
+    seed = int(seed)
+    np.random.seed(seed)
+    generator = getattr(raw_env, "rng", None)
+    if generator is not None:
+        generator.bit_generator.state = (
+            np.random.default_rng(seed).bit_generator.state
+        )
+    return env.reset(seed=seed)
+
+
 def extract_obs(obs, raw_env=None):
     if raw_env is None:
         raise RuntimeError("extract_obs requires raw_env")
@@ -259,6 +281,7 @@ def extract_obs(obs, raw_env=None):
             eef_to_nut=e2n,
             grasp_target_pos=grasp_target,
             nut_pos=nut,
+            nut_yaw_deg=_quat_yaw_deg(nut_quat),
             peg_pos=peg,
             nut_peg_xy_error_m=float(np.linalg.norm(nut_to_peg[:2])),
             nut_peg_distance_m=float(np.linalg.norm(nut_to_peg)),
@@ -327,6 +350,16 @@ def _square_nut_grasp_confirmed(raw_env) -> bool:
         ))
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return False
+
+
+def _quat_yaw_deg(quat) -> float:
+    if quat is None:
+        return float("nan")
+    w, x, y, z = np.asarray(quat, dtype=float).flatten()[:4]
+    return float(np.degrees(np.arctan2(
+        2.0 * (w * z + x * y),
+        1.0 - 2.0 * (y * y + z * z),
+    )))
 
 
 def _square_symmetric_yaw_error_rad(nut_quat, peg_quat) -> float:
@@ -692,7 +725,7 @@ class CL1Agent:
         self.rng = np.random.default_rng(seed)
         self.current_protocol_phase = self.protocol.phase_for_episode(ep_num)
         self._enter_phase_and_observe_rest()
-        obs, _ = self.env.reset(seed=seed)
+        obs, _ = reset_with_seed(self.env, self.raw_env, seed)
         if GENERALIZATION_ENABLED:
             self.active_scenario = self.scenario_schedule.select(
                 ep_num,
@@ -705,6 +738,14 @@ class CL1Agent:
         else:
             self.active_scenario = None
         obs_info = extract_obs(obs, raw_env=self.raw_env)
+        # Recorded so paired conditions can be checked row by row instead of
+        # being assumed equal because they share a seed.
+        initial_layout = {
+            "reset_seed": seed,
+            "initial_nut_x_m": float(obs_info["nut_pos"][0]),
+            "initial_nut_y_m": float(obs_info["nut_pos"][1]),
+            "initial_nut_yaw_deg": float(obs_info["nut_yaw_deg"]),
+        }
         episode_budget_start = self.neurons.budget_snapshot()
         self.contact_encoder.reset()
         self.contact_decoder.reset()
@@ -961,6 +1002,7 @@ class CL1Agent:
             budget_end,
         )
         self.last_episode_metrics = {
+            **initial_layout,
             "episode_success": episode_success,
             "time_to_success_steps": time_to_success_steps,
             "step_count": len(force_history),
