@@ -38,6 +38,7 @@ from core.neurons import (
 )
 from core.decoder import AntagonisticDecoder
 from core.hybrid_control import (
+    pick_reachable_yaw_option,
     NominalControlConfig,
     NominalTaskController,
     TaskPhase,
@@ -97,6 +98,7 @@ WARMUP_SECONDS  = 10
 RENDER_W        = 720
 RENDER_H        = 720
 PLACEMENT_HEIGHT_THRESHOLD_M = 0.05
+GRASP_HANDLE_OUTWARD_OFFSET_M = 0.010
 FORCE_SAFETY_THRESHOLD    = 20.0
 TORQUE_SAFETY_THRESHOLD   = 5.0
 CONTROL_MODE              = os.getenv("SENXE_CONTROL_MODE", "contact_skill").strip().lower()
@@ -243,6 +245,16 @@ def extract_obs(obs, raw_env=None):
                 grasp_target,
                 dtype=float,
             ).flatten()[:3]
+            # The handle site sits about 1 mm clear of the ring wall for an
+            # open finger, so any sideways error on the way down lands a
+            # finger on the ring. Grasp further out along the handle, which
+            # extends 25 mm beyond the site.
+            outward = grasp_target[:2] - nut[:2]
+            outward_norm = float(np.linalg.norm(outward))
+            if outward_norm > 1e-6:
+                grasp_target[:2] += (
+                    GRASP_HANDLE_OUTWARD_OFFSET_M * outward / outward_norm
+                )
         except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             pass
         e2n = grasp_target - eef
@@ -261,6 +273,18 @@ def extract_obs(obs, raw_env=None):
             eef_xmat,
         )
         yaw_error_deg = float(abs(np.degrees(yaw_error_rad)))
+        yaw_options, yaw_outward = _placement_yaw_options(
+            nut_quat,
+            peg_quat,
+            nut,
+            np.asarray(raw_env.robots[0].base_pos, dtype=float),
+        )
+        control_yaw_error_rad = _reachable_yaw_error_rad(
+            nut_quat,
+            peg_quat,
+            nut,
+            np.asarray(raw_env.robots[0].base_pos, dtype=float),
+        )
         grasp_confirmed = _square_nut_grasp_confirmed(raw_env)
         nut_on_peg = bool(raw_env.on_peg(
             nut,
@@ -282,13 +306,16 @@ def extract_obs(obs, raw_env=None):
             grasp_target_pos=grasp_target,
             nut_pos=nut,
             nut_yaw_deg=_quat_yaw_deg(nut_quat),
+            nut_level_error_rad=_level_error_rad(nut_quat),
             peg_pos=peg,
             nut_peg_xy_error_m=float(np.linalg.norm(nut_to_peg[:2])),
             nut_peg_distance_m=float(np.linalg.norm(nut_to_peg)),
             nut_height_above_table_m=nut_height_above_table,
             placement_depth_margin_m=placement_depth_margin,
             nut_peg_yaw_error_deg=yaw_error_deg,
-            nut_peg_yaw_error_rad=yaw_error_rad,
+            nut_peg_yaw_error_rad=control_yaw_error_rad,
+            nut_peg_yaw_options_rad=yaw_options,
+            nut_peg_yaw_option_outward=yaw_outward,
             grasp_yaw_error_rad=grasp_yaw_error_rad,
             grasp_confirmed=grasp_confirmed,
             nut_on_peg=nut_on_peg,
@@ -352,6 +379,29 @@ def _square_nut_grasp_confirmed(raw_env) -> bool:
         return False
 
 
+def _level_error_rad(quat) -> np.ndarray:
+    """World-frame rotation vector that would bring the body's z axis upright.
+
+    Zero when the nut lies flat. Rotating the wrist by this vector levels a
+    rigidly held nut.
+    """
+
+    if quat is None:
+        return np.zeros(3, dtype=float)
+    w, x, y, z = np.asarray(quat, dtype=float).flatten()[:4]
+    body_z = np.array([
+        2.0 * (x * z + w * y),
+        2.0 * (y * z - w * x),
+        1.0 - 2.0 * (x * x + y * y),
+    ])
+    axis = np.cross(body_z, np.array([0.0, 0.0, 1.0]))
+    sine = float(np.linalg.norm(axis))
+    if sine < 1e-9:
+        return np.zeros(3, dtype=float)
+    angle = float(np.arctan2(sine, body_z[2]))
+    return axis / sine * angle
+
+
 def _quat_yaw_deg(quat) -> float:
     if quat is None:
         return float("nan")
@@ -379,6 +429,84 @@ def _square_symmetric_yaw_error_rad(nut_quat, peg_quat) -> float:
     return float(
         (delta + np.pi / 4.0) % (np.pi / 2.0) - np.pi / 4.0
     )
+
+
+def _reachable_yaw_error_rad(
+    nut_quat,
+    peg_quat,
+    place_pos,
+    base_pos,
+) -> float:
+    """Yaw error to the square-symmetric placement the arm can reach.
+
+    The square nut fits the peg in four orientations 90 degrees apart, and
+    the gripper holds it by the handle, about 55 mm from the nut's centre.
+    Taking simply the nearest of the four can leave the handle on the far
+    side of the peg, so the gripper has to reach 55 mm beyond it, where the
+    arm is almost fully extended and stalls short of the target. This picks
+    the nearest orientation whose handle does not point away from the robot
+    base. The handle lies along the nut's own x axis.
+    """
+
+    if nut_quat is None or peg_quat is None:
+        return float("nan")
+
+    def yaw(quat) -> float:
+        w, x, y, z = np.asarray(quat, dtype=float).flatten()[:4]
+        return float(np.arctan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        ))
+
+    nut_yaw = yaw(nut_quat)
+    delta = nut_yaw - yaw(peg_quat)
+    away = np.asarray(place_pos, dtype=float)[:2] - np.asarray(
+        base_pos,
+        dtype=float,
+    )[:2]
+    away_norm = float(np.linalg.norm(away))
+    away = away / away_norm if away_norm > 1e-9 else np.array([1.0, 0.0])
+    errors, outwards = _yaw_options(nut_yaw, delta, away)
+    return float(errors[pick_reachable_yaw_option(errors, outwards)])
+
+
+def _yaw_options(nut_yaw, delta, away):
+    errors = []
+    outwards = []
+    for quarter in range(4):
+        error = float(
+            (delta + quarter * np.pi / 2.0 + np.pi) % (2.0 * np.pi) - np.pi
+        )
+        final_handle_yaw = nut_yaw - error
+        errors.append(error)
+        outwards.append(float(
+            np.cos(final_handle_yaw) * away[0]
+            + np.sin(final_handle_yaw) * away[1]
+        ))
+    return np.asarray(errors), np.asarray(outwards)
+
+
+def _placement_yaw_options(nut_quat, peg_quat, place_pos, base_pos):
+    """The four square-symmetric yaw errors and how far each points outward."""
+
+    if nut_quat is None or peg_quat is None:
+        return np.zeros(0), np.zeros(0)
+
+    def yaw(quat) -> float:
+        w, x, y, z = np.asarray(quat, dtype=float).flatten()[:4]
+        return float(np.arctan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        ))
+
+    nut_yaw = yaw(nut_quat)
+    away = np.asarray(place_pos, dtype=float)[:2] - np.asarray(
+        base_pos,
+        dtype=float,
+    )[:2]
+    away_norm = float(np.linalg.norm(away))
+    away = away / away_norm if away_norm > 1e-9 else np.array([1.0, 0.0])
+    return _yaw_options(nut_yaw, nut_yaw - yaw(peg_quat), away)
 
 
 def _grasp_alignment_yaw_error_rad(nut_quat, eef_xmat) -> float:

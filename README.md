@@ -9,6 +9,14 @@ living neural activity from a Cortical Labs CL1 can learn a small, bounded
 contact-correction skill inside an otherwise deterministic robotic manipulation
 system.
 
+![One simulated episode: grasp, carry, place on the peg](assets/demo_simulator.gif)
+
+*One episode from `senxe_demo_robosuite.py` in simulator mode
+(`SENXE_SIMULATOR=1`). The "neural" signal here is the cl-sdk replay
+simulator, which contains no living culture and cannot learn; the placement
+is done by the deterministic controller. In that 22-episode run 21 episodes
+completed. Nothing in this clip is biological evidence.*
+
 The biological component does **not** plan or control the whole robot. It may
 only suggest five transparent outputs:
 
@@ -161,6 +169,24 @@ Each episode is reset with `reset_with_seed`, which reseeds RoboSuite's own
 placement generator, so the same seed gives the same initial layout in every
 condition; the seed and the initial nut pose are written to each evidence
 row.
+
+### Deterministic controller on its own
+
+The biological path only adds a small bounded correction, so the white-box
+controller has to complete the placement by itself. With no neural input at
+all (silent test double, no cl-sdk), over 120 MuJoCo episodes spanning all
+five training and four held-out contact scenarios, it completed 110 (92%).
+Median peak wrist contact force was 3 to 4 N and 4 episodes touched the 25 N
+hard limit. The 10 failures are one mode: the handle ends up on the far side
+of the peg, the arm reaches full extension about 1 cm short, and the episode
+times out without contact force. This is a software result in simulation.
+
+The controller carries the nut above the peg top, centres over the handle
+before descending, grasps 1 cm out along the handle (the handle site itself
+leaves a finger 1 mm from the ring wall), keeps the carried nut level by
+rotating the wrist, commits to one of the four square-symmetric placements
+whose handle does not point away from the robot, and backs off to line up
+again when a descent or an insertion stalls.
 
 The benchmark writes each episode row to disk as soon as the episode ends,
 and records a run in `<output>.runs.jsonl` before the first pulse, so a

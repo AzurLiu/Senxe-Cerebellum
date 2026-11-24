@@ -22,9 +22,10 @@ def _observation(
     grasp_confirmed=False,
     nut_on_peg=False,
     placement_success=False,
-    nut_height_above_table_m=0.15,
+    nut_height_above_table_m=0.17,
     grasp_yaw_error_rad=0.0,
     nut_peg_yaw_error_rad=0.0,
+    nut_level_error_rad=(0.0, 0.0, 0.0),
 ):
     return {
         "eef_to_nut": np.asarray(eef_to_nut, dtype=float),
@@ -36,6 +37,7 @@ def _observation(
         "nut_height_above_table_m": nut_height_above_table_m,
         "grasp_yaw_error_rad": grasp_yaw_error_rad,
         "nut_peg_yaw_error_rad": nut_peg_yaw_error_rad,
+        "nut_level_error_rad": np.asarray(nut_level_error_rad, dtype=float),
     }
 
 
