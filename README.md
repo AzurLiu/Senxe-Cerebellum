@@ -9,6 +9,14 @@ living neural activity from a Cortical Labs CL1 can learn a small, bounded
 contact-correction skill inside an otherwise deterministic robotic manipulation
 system.
 
+![One simulated episode: grasp, carry, place on the peg](assets/demo_simulator.gif)
+
+*One episode from `senxe_demo_robosuite.py` in simulator mode
+(`SENXE_SIMULATOR=1`). The "neural" signal here is the cl-sdk replay
+simulator, which contains no living culture and cannot learn; the placement
+is done by the deterministic controller. In that 22-episode run 21 episodes
+completed. Nothing in this clip is biological evidence.*
+
 The biological component does **not** plan or control the whole robot. It may
 only suggest five transparent outputs:
 
